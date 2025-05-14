@@ -90,4 +90,85 @@ export async function createSimpleTransferTransaction(connection, sourceKeypair)
     console.error("Error creating transfer transaction:", error);
     throw new Error(`Failed to create transaction: ${error.message}`);
   }
+}
+
+/**
+ * Sends a serialized transaction to a given RPC endpoint.
+ * @param {Connection} connection - Solana Connection object for the specific endpoint.
+ * @param {Buffer} serializedTransaction - The serialized transaction.
+ * @param {string} endpointName - Name of the endpoint for logging/reporting.
+ * @returns {Promise<{sentAt: number, sendDuration: number, rpcSignatureOrError: string | Error}>}
+ */
+export async function sendTransactionToRpc(connection, serializedTransaction, endpointName) {
+  const sentAt = Date.now();
+  let sendDuration;
+  let rpcSignatureOrError;
+
+  console.log(`Attempting to send transaction to ${endpointName} at ${new Date(sentAt).toISOString()}`);
+  try {
+    const signature = await connection.sendRawTransaction(
+      serializedTransaction,
+      {
+        skipPreflight: true,
+        preflightCommitment: 'confirmed',
+        maxRetries: 0,
+      }
+    );
+    sendDuration = Date.now() - sentAt;
+    rpcSignatureOrError = signature;
+    console.log(`Successfully sent to ${endpointName}. RPC Signature: ${signature}, Duration: ${sendDuration}ms`);
+  } catch (error) {
+    sendDuration = Date.now() - sentAt;
+    rpcSignatureOrError = error;
+    console.error(`Error sending to ${endpointName}: ${error.message}, Duration: ${sendDuration}ms`);
+  }
+  return { endpointName, sentAt, sendDuration, rpcSignatureOrError };
+}
+
+/**
+ * Subscribes to a transaction signature for confirmation on a given WebSocket endpoint.
+ * @param {Connection} connection - Solana Connection object for the specific endpoint.
+ * @param {string} transactionSignature - The base58 encoded transaction signature to subscribe to.
+ * @param {string} endpointName - Name of the endpoint for logging/reporting.
+ * @param {number} overallSentAt - Timestamp when the transaction was initially sent (for duration calculation).
+ * @param {function} onConfirmation - Callback function when confirmation is received or error occurs.
+ *                                    Called with ({ endpointName, confirmedAt, wsDuration, error? }).
+ * @returns {Promise<number>} A promise that resolves with the subscription ID, or rejects on immediate error.
+ */
+export async function subscribeToSignatureConfirmation(connection, transactionSignature, endpointName, overallSentAt, onConfirmation) {
+  const wsSubscribedAt = Date.now();
+  console.log(`Subscribing to signature ${transactionSignature} on ${endpointName} at ${new Date(wsSubscribedAt).toISOString()}`);
+  
+  return new Promise((resolve, reject) => {
+    try {
+      const subscriptionId = connection.onSignature(
+        transactionSignature,
+        (notification, context) => {
+          const confirmedAt = Date.now();
+          const wsDuration = confirmedAt - overallSentAt; // Duration from the initial overall send time
+          console.log(`Confirmation received from ${endpointName}. Slot: ${context.slot}, Duration from send: ${wsDuration}ms`, notification);
+          onConfirmation({
+            endpointName,
+            confirmedAt,
+            wsDuration,
+            wsSubscribedAt,
+            confirmationContextSlot: context.slot,
+            error: notification.err ? new Error(JSON.stringify(notification.err)) : null,
+          });
+          // Note: web3.js `onSignature` typically auto-unsubscribes after first notification with target commitment.
+          // If manual unsubscription were needed: connection.removeSignatureListener(subscriptionId);
+        },
+        'confirmed'
+      );
+      resolve(subscriptionId); // Resolve with subscription ID
+    } catch (error) {
+      console.error(`Error subscribing to signature on ${endpointName}: ${error.message}`);
+      onConfirmation({
+        endpointName,
+        wsSubscribedAt,
+        error
+      });
+      reject(error); // Reject on immediate subscription error
+    }
+  });
 } 
