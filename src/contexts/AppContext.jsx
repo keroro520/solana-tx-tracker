@@ -42,6 +42,8 @@ function appReducer(state, action) {
       };
     case 'SET_TX_INFO':
       return { ...state, transactionSignature: action.payload.signature, createdAt: action.payload.createdAt, globalStatus: 'Transaction created. Sending to RPCs & Subscribing to WebSockets...' };
+    case 'SET_GLOBAL_STATUS':
+      return { ...state, globalStatus: action.payload };
     case 'UPDATE_ENDPOINT_RESULT':
       // This is a simplified update; a real one might update or add
       const existingResultIndex = state.results.findIndex(r => r.name === action.payload.name);

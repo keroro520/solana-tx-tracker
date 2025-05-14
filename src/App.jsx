@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import './App.css';
 import { Keypair, Connection } from '@solana/web3.js';
 import { useAppContext } from './contexts/AppContext';
@@ -6,7 +6,12 @@ import GlobalAlert from './components/GlobalAlert.jsx';
 import ResultsTable from './components/ResultsTable.jsx';
 import TransactionInfo from './components/TransactionInfo.jsx';
 import ConfigDisplay from './components/ConfigDisplay.jsx';
-import { parsePrivateKey, createSimpleTransferTransaction } from './utils/solanaUtils.js';
+import { 
+  parsePrivateKey, 
+  createSimpleTransferTransaction, 
+  sendTransactionToRpc,
+  subscribeToSignatureConfirmation 
+} from './utils/solanaUtils.js';
 
 // Updated config loading logic
 async function loadAppConfiguration() {
@@ -36,6 +41,7 @@ async function loadAppConfiguration() {
 
 function App() {
   const { state, dispatch } = useAppContext();
+  const activeSubscriptions = useRef([]); // To keep track of active WS subscriptions for potential cleanup
 
   useEffect(() => {
     const loadInitialConfig = async () => {
@@ -47,6 +53,17 @@ function App() {
       }
     };
     loadInitialConfig();
+
+    // Cleanup subscriptions on component unmount
+    return () => {
+      activeSubscriptions.current.forEach(({ connection, subId }) => {
+        if (connection && typeof connection.removeSignatureListener === 'function') {
+          console.log("Cleaning up App: Removing subscription ID:", subId);
+          connection.removeSignatureListener(subId);
+        }
+      });
+      activeSubscriptions.current = [];
+    };
   }, [dispatch]);
 
   const handleSendTransaction = async () => {
@@ -57,54 +74,109 @@ function App() {
     dispatch({ type: 'PROCESS_START' });
     console.log("Send Transaction Clicked. Config Loaded From:", state.config.loadedPath);
 
+    // Clear previous subscriptions
+    activeSubscriptions.current.forEach(({ connection, subId }) => {
+        if (connection && typeof connection.removeSignatureListener === 'function') {
+            console.log("Clearing old subscription ID:", subId);
+            connection.removeSignatureListener(subId);
+        }
+    });
+    activeSubscriptions.current = [];
+
+    let sourceKeypair;
+    let initialConnection; // For creating the transaction
+    let transactionSignatureB58;
+    let txCreatedAt;
+    let serializedTransaction;
+
     try {
       const secretKeyUint8Array = parsePrivateKey(state.config.privateKey);
-      const sourceKeypair = Keypair.fromSecretKey(secretKeyUint8Array);
-      
-      // Use the first RPC endpoint for connection to create the transaction initially
-      const connection = new Connection(state.config.endpoints[0].rpcUrl, 'confirmed');
+      sourceKeypair = Keypair.fromSecretKey(secretKeyUint8Array);
+      initialConnection = new Connection(state.config.endpoints[0].rpcUrl, 'confirmed');
 
-      const { transaction, signature, createdAt } = await createSimpleTransferTransaction(connection, sourceKeypair);
+      const { transaction, signature, createdAt } = await createSimpleTransferTransaction(initialConnection, sourceKeypair);
+      transactionSignatureB58 = signature;
+      txCreatedAt = createdAt;
+      serializedTransaction = transaction.serialize();
       
-      dispatch({ type: 'SET_TX_INFO', payload: { signature, createdAt } });
-      console.log('Signed transaction:', transaction);
-      console.log('Transaction signature:', signature);
+      dispatch({ type: 'SET_TX_INFO', payload: { signature: transactionSignatureB58, createdAt: txCreatedAt } });
+      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Transaction created. Sending & Subscribing...' });
 
-      // TODO: Implement Phase 4 - Serialize transaction and send to ALL RPCs, Subscribe to ALL WebSockets
-      // For now, continue with simulation for UI display
-      if (state.config && state.config.endpoints) {
-        state.config.endpoints.forEach(ep => {
+      const overallSentAt = Date.now(); // Timestamp for all parallel operations start
+
+      const rpcPromises = state.config.endpoints.map(ep => {
+        const epConnection = new Connection(ep.rpcUrl, 'confirmed');
+        dispatch({ 
+            type: 'UPDATE_ENDPOINT_RESULT', 
+            payload: { name: ep.name, status: 'Sending RPC... ' }
+        });
+        return sendTransactionToRpc(epConnection, serializedTransaction, ep.name);
+      });
+
+      const rpcResults = await Promise.allSettled(rpcPromises);
+      
+      rpcResults.forEach(result => {
+        if (result.status === 'fulfilled') {
+          const { endpointName, sentAt, sendDuration, rpcSignatureOrError } = result.value;
           dispatch({ 
             type: 'UPDATE_ENDPOINT_RESULT', 
             payload: { 
-              name: ep.name, 
-              // Simulate some placeholder values, actual values will come from RPC/WS responses
-              sendDuration: 'Pending...', 
-              confirmationDuration: 'Pending...',
-              status: 'Sending...',
-              error: null
+              name: endpointName, 
+              sentAt,
+              sendDuration, 
+              status: rpcSignatureOrError instanceof Error ? `RPC Error: ${rpcSignatureOrError.message}` : 'RPC Sent, Awaiting WS...',
+              error: rpcSignatureOrError instanceof Error ? { message: rpcSignatureOrError.message } : null,
+              rpcSignature: typeof rpcSignatureOrError === 'string' ? rpcSignatureOrError : null
             }
           });
-        });
-      }
-      // Simulate a delay for network operations before showing "completion"
-      setTimeout(() => {
-        // This part will be replaced by actual WebSocket confirmation logic
-        if (state.config && state.config.endpoints) {
-            state.config.endpoints.forEach(ep => {
-              dispatch({ 
+        } else {
+          // Should not happen often if sendTransactionToRpc catches its own errors
+          console.error("Unhandled error in RPC send promise:", result.reason);
+          // Dispatch an update for this endpoint if its name can be derived or use a general error
+        }
+      });
+
+      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'RPC sends complete. Awaiting WebSocket confirmations...' });
+
+      let confirmedCount = 0;
+      const totalEndpoints = state.config.endpoints.length;
+
+      state.config.endpoints.forEach(ep => {
+        const epConnection = new Connection(ep.rpcUrl, { wsEndpoint: ep.wsUrl, commitment: 'confirmed' });
+        subscribeToSignatureConfirmation(
+          epConnection,
+          transactionSignatureB58,
+          ep.name,
+          overallSentAt,
+          (confirmationResult) => {
+            dispatch({ type: 'UPDATE_ENDPOINT_RESULT', payload: confirmationResult });
+            if (!confirmationResult.error) {
+              confirmedCount++;
+            }
+            if (confirmedCount === totalEndpoints || 
+                state.results.filter(r => r.status && !r.status.includes("Pending")).length === totalEndpoints) { // Check if all have reported something
+              dispatch({ type: 'PROCESS_COMPLETE' });
+            }
+          }
+        )
+        .then(subId => {
+            activeSubscriptions.current.push({ connection: epConnection, subId });
+        })
+        .catch(subError => {
+            console.error(`Failed to initiate subscription for ${ep.name}:`, subError);
+            dispatch({ 
                 type: 'UPDATE_ENDPOINT_RESULT', 
                 payload: { 
-                  name: ep.name, 
-                  sendDuration: Math.floor(Math.random() * 100) + 20, //ms
-                  confirmationDuration: Math.floor(Math.random() * 1500) + 500, //ms
-                  status: 'Confirmed (Simulated)'
+                    name: ep.name, 
+                    status: `WS Sub Error: ${subError.message}`,
+                    error: { message: subError.message }
                 }
-              });
             });
-        }
-        dispatch({ type: 'PROCESS_COMPLETE' });
-      }, 3000); // Increased delay to simulate async ops
+        });
+      });
+
+      // Note: PROCESS_COMPLETE is now dispatched within the WS callback logic
+      // or after a timeout (to be implemented in Phase 6)
 
     } catch (error) {
       console.error("Error during transaction processing:", error);
