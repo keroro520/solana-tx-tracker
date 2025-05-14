@@ -7,7 +7,7 @@ const TransactionInfo = ({ signature, createdAt }) => {
         <p><strong>Transaction Signature:</strong> {signature}</p>
       )}
       {createdAt && (
-        <p><strong>Created At:</strong> {new Date(createdAt).toLocaleString()}</p>
+        <p><strong>Created At:</strong> {new Date(createdAt).toISOString()}</p>
       )}
     </div>
   );
