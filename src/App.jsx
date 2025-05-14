@@ -1,10 +1,12 @@
 import React, { useEffect } from 'react';
 import './App.css';
+import { Keypair, Connection } from '@solana/web3.js';
 import { useAppContext } from './contexts/AppContext';
 import GlobalAlert from './components/GlobalAlert.jsx';
 import ResultsTable from './components/ResultsTable.jsx';
 import TransactionInfo from './components/TransactionInfo.jsx';
 import ConfigDisplay from './components/ConfigDisplay.jsx';
+import { parsePrivateKey, createSimpleTransferTransaction } from './utils/solanaUtils.js';
 
 // Updated config loading logic
 async function loadAppConfiguration() {
@@ -47,42 +49,67 @@ function App() {
     loadInitialConfig();
   }, [dispatch]);
 
-  const handleSendTransaction = () => {
-    if (!state.config || !state.config.privateKey || !state.config.endpoints) {
-      dispatch({ type: 'SET_GLOBAL_ERROR', payload: { message: 'Configuration is missing or invalid. Please check src/config/appConfig.js.', type: 'config' } });
+  const handleSendTransaction = async () => {
+    if (!state.config || !state.config.privateKey || !state.config.endpoints || state.config.endpoints.length === 0) {
+      dispatch({ type: 'SET_GLOBAL_ERROR', payload: { message: 'Configuration is missing, invalid, or has no endpoints. Please check src/config/appConfig.js.', type: 'config' } });
       return;
     }
     dispatch({ type: 'PROCESS_START' });
-    console.log("Send Transaction Clicked. Config Loaded From:", state.config.loadedPath, "Config Data:", state.config);
-    // Placeholder for actual transaction sending logic - to be built in later phases
-    setTimeout(() => {
-      dispatch({ type: 'SET_TX_INFO', payload: { signature: `SIM_TxSig_${Date.now()}`.slice(0,44) + '...', createdAt: Date.now() } });
-      // Simulate some results based on loaded config
+    console.log("Send Transaction Clicked. Config Loaded From:", state.config.loadedPath);
+
+    try {
+      const secretKeyUint8Array = parsePrivateKey(state.config.privateKey);
+      const sourceKeypair = Keypair.fromSecretKey(secretKeyUint8Array);
+      
+      // Use the first RPC endpoint for connection to create the transaction initially
+      const connection = new Connection(state.config.endpoints[0].rpcUrl, 'confirmed');
+
+      const { transaction, signature, createdAt } = await createSimpleTransferTransaction(connection, sourceKeypair);
+      
+      dispatch({ type: 'SET_TX_INFO', payload: { signature, createdAt } });
+      console.log('Signed transaction:', transaction);
+      console.log('Transaction signature:', signature);
+
+      // TODO: Implement Phase 4 - Serialize transaction and send to ALL RPCs, Subscribe to ALL WebSockets
+      // For now, continue with simulation for UI display
       if (state.config && state.config.endpoints) {
         state.config.endpoints.forEach(ep => {
           dispatch({ 
             type: 'UPDATE_ENDPOINT_RESULT', 
             payload: { 
               name: ep.name, 
-              sendDuration: Math.floor(Math.random() * 100) + 20, //ms
-              confirmationDuration: Math.floor(Math.random() * 1500) + 500, //ms
-              status: 'Confirmed (Simulated)',
+              // Simulate some placeholder values, actual values will come from RPC/WS responses
+              sendDuration: 'Pending...', 
+              confirmationDuration: 'Pending...',
+              status: 'Sending...',
               error: null
             }
           });
         });
-      } else {
-         // Simulate one error if no endpoints
-         dispatch({ 
-            type: 'UPDATE_ENDPOINT_RESULT', 
-            payload: { 
-              name: "No Endpoints Configured", 
-              error: { message: "No endpoints found in configuration."}
-            }
-          });
       }
-      dispatch({ type: 'PROCESS_COMPLETE' });
-    }, 2000);
+      // Simulate a delay for network operations before showing "completion"
+      setTimeout(() => {
+        // This part will be replaced by actual WebSocket confirmation logic
+        if (state.config && state.config.endpoints) {
+            state.config.endpoints.forEach(ep => {
+              dispatch({ 
+                type: 'UPDATE_ENDPOINT_RESULT', 
+                payload: { 
+                  name: ep.name, 
+                  sendDuration: Math.floor(Math.random() * 100) + 20, //ms
+                  confirmationDuration: Math.floor(Math.random() * 1500) + 500, //ms
+                  status: 'Confirmed (Simulated)'
+                }
+              });
+            });
+        }
+        dispatch({ type: 'PROCESS_COMPLETE' });
+      }, 3000); // Increased delay to simulate async ops
+
+    } catch (error) {
+      console.error("Error during transaction processing:", error);
+      dispatch({ type: 'PROCESS_ERROR', payload: { message: error.message } });
+    }
   };
 
   return (
