@@ -202,8 +202,10 @@ function App() {
         <button onClick={handleSendTransaction} disabled={state.isLoading || !state.config}>
           {state.isLoading ? 'Processing...' : 'Send Transaction'}
         </button>
-        {state.isLoading && <span className="spinner" style={{ marginLeft: '10px' }}>⏳</span>}
-        <p style={{ marginTop: '5px' }}><strong>Status:</strong> {state.globalStatus}</p>
+        {state.isLoading && <span className="spinner"></span>}
+        <p style={{ marginTop: '5px' }} className="status-text">
+            <strong>Status:</strong> {state.globalStatus}
+        </p>
       </div>
 
       <TransactionInfo signature={state.transactionSignature} createdAt={state.createdAt} />
