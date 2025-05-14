@@ -22,16 +22,8 @@ async function loadAppConfiguration() {
     configModule = await import('../config/appConfig.js');
     console.log("Loaded appConfig.js successfully.");
   } catch (e) {
-    console.warn("appConfig.js not found or failed to load, falling back to appConfig.example.js. Error:", e.message);
-    try {
-      // Fallback to the example configuration if the actual one isn't found
-      configModule = await import('../config/appConfig.example.js');
-      loadedConfigPath = 'src/config/appConfig.example.js';
-      console.log("Loaded appConfig.example.js as fallback.");
-    } catch (exampleError) {
-      console.error("Failed to load appConfig.example.js as well:", exampleError);
-      throw new Error("Configuration files (appConfig.js and appConfig.example.js) are missing or invalid.");
-    }
+      console.error("Failed to load appConfig.js as well:", e);
+      throw new Error("Configuration file appConfig.js is missing or invalid.");
   }
   if (!configModule || !configModule.appConfig) {
     throw new Error(`The configuration file (${loadedConfigPath}) did not export an 'appConfig' object.`);
