@@ -133,20 +133,59 @@ export async function sendTransactionToRpc(connection, serializedTransaction, en
  * @param {number} overallSentAt - Timestamp when the transaction was initially sent (for duration calculation).
  * @param {function} onConfirmation - Callback function when confirmation is received or error occurs.
  *                                    Called with ({ endpointName, confirmedAt, wsDuration, error? }).
+ * @param {number} timeoutMs - Optional timeout in milliseconds for the subscription (default 30 seconds).
  * @returns {Promise<number>} A promise that resolves with the subscription ID, or rejects on immediate error.
  */
-export async function subscribeToSignatureConfirmation(connection, transactionSignature, endpointName, overallSentAt, onConfirmation) {
+export async function subscribeToSignatureConfirmation(
+  connection, 
+  transactionSignature, 
+  endpointName, 
+  overallSentAt, 
+  onConfirmation,
+  timeoutMs = 30000 // Default timeout 30 seconds
+) {
   const wsSubscribedAt = Date.now();
-  console.log(`Subscribing to signature ${transactionSignature} on ${endpointName} at ${new Date(wsSubscribedAt).toISOString()}`);
+  console.log(`Subscribing to signature ${transactionSignature} on ${endpointName} at ${new Date(wsSubscribedAt).toISOString()} with timeout ${timeoutMs}ms`);
   
+  let timeoutId = null;
+  let subId = null; // To store the subscription ID for cleanup
+
+  const cleanup = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+    if (subId && connection && typeof connection.removeSignatureListener === 'function') {
+      console.log(`Cleaning up subscription ${subId} for ${endpointName}`);
+      connection.removeSignatureListener(subId).catch(err => console.error(`Error removing listener for ${endpointName}:`, err));
+      subId = null;
+    }
+  };
+
   return new Promise((resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      cleanup();
+      const error = new Error(`Timeout: No confirmation received from ${endpointName} for ${transactionSignature} within ${timeoutMs / 1000}s.`);
+      console.warn(error.message);
+      onConfirmation({
+        endpointName,
+        wsSubscribedAt,
+        error,
+        status: 'Timeout' // Custom status for timeout
+      });
+      // Resolve rather than reject, as the Promise is for subscription setup, not the confirmation itself.
+      // The onConfirmation callback handles the outcome.
+      resolve(null); // Indicate timeout to the caller if needed, or simply rely on onConfirmation.
+    }, timeoutMs);
+
     try {
-      const subscriptionId = connection.onSignature(
+      subId = connection.onSignature(
         transactionSignature,
         (notification, context) => {
+          cleanup(); // Clear timeout and remove listener once notification (success or error) is received
           const confirmedAt = Date.now();
-          const wsDuration = confirmedAt - overallSentAt; // Duration from the initial overall send time
-          console.log(`Confirmation received from ${endpointName}. Slot: ${context.slot}, Duration from send: ${wsDuration}ms`, notification);
+          const wsDuration = confirmedAt - overallSentAt;
+          console.log(`Confirmation event from ${endpointName}. Slot: ${context.slot}, Duration from send: ${wsDuration}ms`, notification);
           onConfirmation({
             endpointName,
             confirmedAt,
@@ -154,21 +193,23 @@ export async function subscribeToSignatureConfirmation(connection, transactionSi
             wsSubscribedAt,
             confirmationContextSlot: context.slot,
             error: notification.err ? new Error(JSON.stringify(notification.err)) : null,
+            status: notification.err ? 'WS Error' : 'Confirmed'
           });
-          // Note: web3.js `onSignature` typically auto-unsubscribes after first notification with target commitment.
-          // If manual unsubscription were needed: connection.removeSignatureListener(subscriptionId);
         },
         'confirmed'
       );
-      resolve(subscriptionId); // Resolve with subscription ID
+      // Store the subId for potential cleanup by the caller if the promise itself is part of a race or early exit
+      resolve(subId); 
     } catch (error) {
+      cleanup();
       console.error(`Error subscribing to signature on ${endpointName}: ${error.message}`);
       onConfirmation({
         endpointName,
         wsSubscribedAt,
-        error
+        error,
+        status: 'WS Subscription Error'
       });
-      reject(error); // Reject on immediate subscription error
+      reject(error); // Reject on immediate subscription setup error
     }
   });
 } 
