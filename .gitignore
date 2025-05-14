@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local configuration - KEEP SENSITIVE DATA OUT OF VERSION CONTROL
+src/config/appConfig.js
+.env
+.env.*
+!.env.example
