@@ -126,6 +126,8 @@ function appReducer(state, action) {
         firstConfirmedByEndpointName: state.firstConfirmedByEndpointName,
         rpcSendResults: [...state.rpcSendResults],
         wsConfirmationResults: [...state.wsConfirmationResults],
+        slot: state.slot,
+        blockTime: state.blockTime,
         error: null, // Explicitly set error to null for successful completion
       };
       const updatedAllTransactionResults = [...state.allTransactionResults, newResult];
@@ -208,6 +210,8 @@ function appReducer(state, action) {
         ...state,
         firstWsConfirmedAt: action.payload.timestamp,
         firstConfirmedByEndpointName: action.payload.endpointName,
+        slot: action.payload.slot,
+        blockTime: action.payload.blockTime,
       };
     default:
       return state;

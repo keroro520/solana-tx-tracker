@@ -22,6 +22,12 @@ const TransactionTimingsTable = ({ allTransactionsData, network }) => {
       : `https://solscan.io/tx/${signature}?cluster=devnet`;
   };
 
+  const formatBlockTimestamp = (unixTimestamp) => {
+    if (unixTimestamp === null || typeof unixTimestamp === 'undefined') return 'N/A';
+    // Assuming unixTimestamp is in seconds
+    return new Date(unixTimestamp * 1000).toISOString();
+  };
+
   if (!allTransactionsData || allTransactionsData.length === 0) {
     return (
       <div className="transaction-timings-table" style={{ marginBottom: '20px' }}>
@@ -42,6 +48,7 @@ const TransactionTimingsTable = ({ allTransactionsData, network }) => {
             <th style={{ textAlign: 'left' }}>TxCreatedAt</th>
             <th style={{ textAlign: 'left' }}>TxFirstSentAt (&lt;rpc endpointName&gt;)</th>
             <th style={{ textAlign: 'left' }}>TxFirstConfirmedAt (&lt;ws endpointName&gt;)</th>
+            <th style={{ textAlign: 'left' }}>Block Timestamp</th>
             <th style={{ textAlign: 'left' }}>Confirmation Duration (Create to First WS Confirm)</th>
             <th style={{ textAlign: 'left' }}>Status</th>
           </tr>
@@ -66,6 +73,7 @@ const TransactionTimingsTable = ({ allTransactionsData, network }) => {
               <td>{formatOptTimestamp(txData.createdAt)}</td>
               <td>{formatOptTimestamp(txData.sentAt)} {txData.firstSentToEndpointName ? `(${txData.firstSentToEndpointName})` : ''}</td>
               <td>{formatOptTimestamp(txData.firstWsConfirmedAt)} {txData.firstConfirmedByEndpointName ? `(${txData.firstConfirmedByEndpointName})` : ''}</td>
+              <td>{formatBlockTimestamp(txData.blockTime)}</td>
               <td>{calculateDuration(txData.createdAt, txData.firstWsConfirmedAt)}</td>
               <td>{txData.error ? <span style={{ color: 'red' }}>Error: {txData.error}</span> : <span style={{ color: 'green'}}>Success</span>}</td>
             </tr>

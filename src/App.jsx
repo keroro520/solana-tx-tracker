@@ -223,7 +223,7 @@ function App() {
             if (confirmationResult.error) {
               logMessage += `Error: ${confirmationResult.error.message}. Raw error: ${JSON.stringify(confirmationResult.rawError || confirmationResult.error)}`;
             } else {
-              logMessage += `Confirmed. Slot: ${confirmationResult.confirmationContextSlot}. Raw data: ${JSON.stringify(confirmationResult.rawNotification || 'N/A')}`;
+              logMessage += `Confirmed. Slot: ${confirmationResult.slot}. BlockTime: ${confirmationResult.blockTime ? confirmationResult.blockTime : 'N/A'}. Raw data: ${JSON.stringify(confirmationResult.rawNotification || 'N/A')}`;
               if (confirmationResult.wsDurationMs) {
                 logMessage += ` Duration from sub attempt: ${confirmationResult.wsDurationMs} ms.`;
               }
@@ -236,7 +236,15 @@ function App() {
               if (!firstWsConfirmedRef.current) {
                 console.log(`Tx ${txIndex + 1}/${totalTx}: First WS confirmation from ${confirmationResult.endpointName} (sig: ${transactionSignatureB58.substring(0,6)}...). Completing this transaction.`);
                 firstWsConfirmedRef.current = true; // Guard set: This is the one!
-                dispatch({ type: 'SET_FIRST_WS_CONFIRMED_AT', payload: { timestamp: currentEventTimestamp, endpointName: confirmationResult.endpointName } });
+                dispatch({ 
+                  type: 'SET_FIRST_WS_CONFIRMED_AT', 
+                  payload: { 
+                    timestamp: currentEventTimestamp, 
+                    endpointName: confirmationResult.endpointName,
+                    slot: confirmationResult.slot,
+                    blockTime: confirmationResult.blockTime
+                  }
+                });
                 dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Tx ${txIndex + 1}/${totalTx}: Complete (First WS Confirmation via ${confirmationResult.endpointName})` });
                 dispatch({ type: 'PROCESS_SINGLE_TX_COMPLETE' });
 
@@ -328,11 +336,11 @@ function App() {
 
       dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Tx ${txIndex + 1}/${totalTx}: All RPC sends and WebSocket subscriptions initiated. Awaiting first WS confirmation...` });
 
-      await Promise.allSettled(wsPromises).then(() => {
+      await Promise.allSettled(wsPromises).then((results) => {
         if (state.isLoading && !firstWsConfirmedRef.current && !state.isComplete) { 
           console.log(`Tx ${txIndex + 1}/${totalTx}: All WS subscription attempts settled. No single WS confirmed first. Completing this transaction (fallback) (sig: ${transactionSignatureB58.substring(0,6)}...).`);
           dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Tx ${txIndex + 1}/${totalTx}: Complete (No immediate WS confirmation; check individual statuses).` });
-          dispatch({ type: 'PROCESS_SINGLE_TX_COMPLETE' });
+          dispatch({ type: 'PROCESS_SINGLE_TX_COMPLETE' }); 
           
           console.log(`Tx ${txIndex + 1}/${totalTx}: Cleaning up any remaining WebSocket subscriptions (fallback) (sig: ${transactionSignatureB58.substring(0,6)}...).`);
           activeSubscriptions.current.forEach(({ connection: subConn, subId, name: subName }) => {

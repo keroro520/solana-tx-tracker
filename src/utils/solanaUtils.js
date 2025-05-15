@@ -153,8 +153,8 @@ export async function subscribeToSignatureConfirmation(
       timeoutId = null;
     }
     if (subId && connection && typeof connection.removeSignatureListener === 'function') {
-      console.log(`Cleaning up subscription ${subId} for ${endpointName}`);
-      connection.removeSignatureListener(subId).catch(err => console.error(`Error removing listener for ${endpointName}:`, err));
+      console.log(`Cleaning up subscription ${subId} for ${endpointName} (sig: ${transactionSignature.substring(0,6)}...)`);
+      connection.removeSignatureListener(subId).catch(err => console.error(`Error removing listener for ${endpointName} (sig: ${transactionSignature.substring(0,6)}...):`, err));
       subId = null;
     }
   };
@@ -162,51 +162,140 @@ export async function subscribeToSignatureConfirmation(
   return new Promise((resolve, reject) => {
     timeoutId = setTimeout(() => {
       cleanup();
-      const error = new Error(`Timeout: No confirmation received from ${endpointName} for ${transactionSignature} within ${timeoutMs / 1000}s.`);
+      const error = new Error(`Timeout: No confirmation received from ${endpointName} for ${transactionSignature.substring(0,6)}... within ${timeoutMs / 1000}s.`);
       console.warn(error.message);
       onConfirmation({
         endpointName,
         wsSubscribedAt,
+        overallSentAtForDurCalc: overallSentAt, // Pass through for timeout duration calculation
         error,
         status: 'Timeout' // Custom status for timeout
       });
-      // Resolve rather than reject, as the Promise is for subscription setup, not the confirmation itself.
-      // The onConfirmation callback handles the outcome.
-      resolve(null); // Indicate timeout to the caller if needed, or simply rely on onConfirmation.
+      resolve({ wsConnection: connection, subId: null, wsName: endpointName, error }); 
     }, timeoutMs);
 
     try {
       subId = connection.onSignature(
         transactionSignature,
-        (notification, context) => {
-          cleanup(); // Clear timeout and remove listener once notification (success or error) is received
+        async (notificationResult, context) => { // notificationResult is the SignatureResult, context contains the slot
+          cleanup(); 
           const confirmedAt = Date.now();
-          const wsDuration = confirmedAt - overallSentAt;
-          console.log(`Confirmation event from ${endpointName}. Slot: ${context.slot}, Duration from send: ${wsDuration}ms`, notification);
+          const wsDuration = confirmedAt - overallSentAt; // Duration from overall send to WS confirm signal
+          
+          // Log that WS confirmation signal was received
+          console.log(`Tx ${transactionSignature.substring(0,6)}...: WS confirmation signal from ${endpointName}. WS Slot: ${context.slot}. Duration from send to WS signal: ${wsDuration}ms. Error in WS signal: ${JSON.stringify(notificationResult.err)}`);
+
+          if (notificationResult.err) {
+            // If the WS subscription itself reports an error for the signature
+            onConfirmation({
+              endpointName,
+              confirmedAt,
+              wsDuration,
+              wsSubscribedAt,
+              overallSentAtForDurCalc: overallSentAt,
+              slot: context.slot, // Slot from WS context
+              blockTime: null,
+              error: new Error(typeof notificationResult.err === 'string' ? notificationResult.err : JSON.stringify(notificationResult.err)),
+              rawNotification: notificationResult,
+              rawError: notificationResult.err,
+              status: 'WS Signature Error'
+            });
+            return; // Stop further processing
+          }
+
+          // If WS signal is successful, proceed to fetch full transaction details for blockTime and authoritative slot
+          let fetchedSlot = null;
+          let fetchedBlockTime = null;
+          let getTransactionError = null;
+          const maxRetries = 10;
+          const retryDelay = 1000; // 1 second delay between retries
+
+          try {
+            console.log(`Tx ${transactionSignature.substring(0,6)}...: WS signal OK from ${endpointName}. Attempting getTransaction for more details.`);
+            
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+              try {
+                const transactionDetails = await connection.getTransaction(transactionSignature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+                
+                if (transactionDetails && transactionDetails.slot) {
+                  fetchedSlot = transactionDetails.slot;
+                  fetchedBlockTime = transactionDetails.blockTime || null; // blockTime can be null
+                  console.log(`Tx ${transactionSignature.substring(0,6)}...: getTransaction for ${endpointName} successful on attempt ${attempt}. RPC Slot: ${fetchedSlot}, BlockTime: ${fetchedBlockTime}`);
+                  getTransactionError = null; // Clear any previous attempt error
+                  break; // Exit loop on success
+                } else {
+                  console.warn(`Tx ${transactionSignature.substring(0,6)}...: getTransaction for ${endpointName} attempt ${attempt} did not return details or slot. Retrying if attempts < ${maxRetries}...`);
+                  getTransactionError = new Error(`getTransaction returned null or no slot on attempt ${attempt}.`);
+                }
+              } catch (err) {
+                console.error(`Tx ${transactionSignature.substring(0,6)}...: Error calling getTransaction for ${endpointName} on attempt ${attempt}:`, err);
+                getTransactionError = err; // Store the last error
+              }
+
+              if (attempt < maxRetries) {
+                console.log(`Tx ${transactionSignature.substring(0,6)}...: Waiting ${retryDelay}ms before next getTransaction attempt for ${endpointName}.`);
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
+              } else if (attempt === maxRetries && getTransactionError) {
+                 console.error(`Tx ${transactionSignature.substring(0,6)}...: All ${maxRetries} getTransaction attempts failed for ${endpointName}. Last error: ${getTransactionError.message}`);
+              }
+            }
+
+            // If after retries, we still don't have a fetchedSlot from RPC, but we have a WS slot, use it as fallback.
+            if (!fetchedSlot && context.slot) {
+                console.warn(`Tx ${transactionSignature.substring(0,6)}...: getTransaction failed after retries for ${endpointName}. Falling back to WS slot ${context.slot}.`);
+                fetchedSlot = context.slot;
+                // Keep getTransactionError to indicate that RPC fetch ultimately failed, even if we use WS slot.
+                if (!getTransactionError) { // If loop completed without success but no explicit error was caught (e.g. null responses)
+                    getTransactionError = new Error('getTransaction failed after all retries, using WS slot as fallback.');
+                }
+            } else if (!fetchedSlot && !context.slot) {
+                // This case should be rare if WS confirmed, but good to log
+                console.error(`Tx ${transactionSignature.substring(0,6)}...: CRITICAL - getTransaction failed AND no context.slot from WS for ${endpointName}. Slot will be null.`);
+            }
+
+          } catch (err) {
+            // This outer catch is for any unexpected error in the retry logic itself, though individual attempts are caught inside.
+            console.error(`Tx ${transactionSignature.substring(0,6)}...: Critical error in getTransaction retry logic for ${endpointName}:`, err);
+            getTransactionError = err;
+            if (!fetchedSlot && context.slot) fetchedSlot = context.slot; // Fallback to WS slot on critical error too
+          }
+
+          // Final values before calling onConfirmation
+          console.log(`Tx ${transactionSignature.substring(0,6)}... FINALIZING for ${endpointName}: 
+            Fetched Slot: ${fetchedSlot}, 
+            Fetched BlockTime: ${fetchedBlockTime}, 
+            WS Context Slot: ${context.slot}, 
+            GetTransactionError: ${getTransactionError ? getTransactionError.message : null}, 
+            WS Notification Error: ${notificationResult.err ? JSON.stringify(notificationResult.err) : null}`);
+
           onConfirmation({
             endpointName,
-            confirmedAt,
-            wsDuration,
+            confirmedAt, // Timestamp of WS confirmation signal
+            wsDuration,    // Duration from initial send to WS signal
             wsSubscribedAt,
-            confirmationContextSlot: context.slot,
-            error: notification.err ? new Error(JSON.stringify(notification.err)) : null,
-            status: notification.err ? 'WS Error' : 'Confirmed'
+            overallSentAtForDurCalc: overallSentAt,
+            slot: fetchedSlot, // Authoritative slot from getTransaction, or fallback to WS context.slot
+            blockTime: fetchedBlockTime, // blockTime from getTransaction
+            error: getTransactionError, // Prefer getTransaction error if it occurred
+            rawNotification: notificationResult, // Original WS notification
+            rawError: getTransactionError || notificationResult.err, // Capture any error
+            status: getTransactionError ? 'RPC GetTransaction Error' : 'Confirmed'
           });
         },
-        'confirmed'
+        'confirmed' // Subscribe to 'confirmed' commitment level for the signature status
       );
-      // Store the subId for potential cleanup by the caller if the promise itself is part of a race or early exit
-      resolve(subId); 
+      resolve({ wsConnection: connection, subId, wsName: endpointName }); 
     } catch (error) {
       cleanup();
-      console.error(`Error subscribing to signature on ${endpointName}: ${error.message}`);
+      console.error(`Error subscribing to signature on ${endpointName} (sig: ${transactionSignature.substring(0,6)}...): ${error.message}`);
       onConfirmation({
         endpointName,
         wsSubscribedAt,
+        overallSentAtForDurCalc: overallSentAt,
         error,
-        status: 'WS Subscription Error'
+        status: 'WS Subscription Setup Error'
       });
-      reject(error); // Reject on immediate subscription setup error
+      reject(error); 
     }
   });
 } 
