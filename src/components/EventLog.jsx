@@ -7,7 +7,7 @@ function EventLog({ events }) {
   }
 
   const formatTimestamp = (timestamp) => {
-    return new Date(timestamp).toLocaleString(); // Or any other format you prefer
+    return new Date(timestamp).toISOString(); // Format to ISO string with milliseconds
   };
 
   return (
