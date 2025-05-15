@@ -214,13 +214,13 @@ function App() {
           overallStartTime, 
           (confirmationResult) => {
             if (firstWsConfirmedRef.current && state.isComplete) {
-                console.log(`WS Conf from ${confirmationResult.name} received, but process already marked complete. Ignoring.`);
+                console.log(`WS Conf from ${confirmationResult.endpointName} received, but process already marked complete. Ignoring.`);
                 return;
             }
 
             dispatch({ type: 'UPDATE_WS_CONFIRMATION_RESULT', payload: confirmationResult });
             
-            let logMessage = `WebSocket message received from ${confirmationResult.name}: `;
+            let logMessage = `WebSocket message received from ${confirmationResult.endpointName}: `;
             if (confirmationResult.error) {
               logMessage += `Error: ${confirmationResult.error.message}. Raw error: ${JSON.stringify(confirmationResult.rawError || confirmationResult.error)}`;
             } else {
@@ -234,10 +234,10 @@ function App() {
 
             if (!confirmationResult.error) {
               if (!firstWsConfirmedRef.current) {
-                console.log(`First WS confirmation from ${confirmationResult.name}. Completing process.`);
+                console.log(`First WS confirmation from ${confirmationResult.endpointName}. Completing process.`);
                 firstWsConfirmedRef.current = true;
                 dispatch({ type: 'SET_FIRST_WS_CONFIRMED_AT', payload: currentEventTimestamp });
-                dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Process Complete (First WS Confirmation via ${confirmationResult.name})` });
+                dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Process Complete (First WS Confirmation via ${confirmationResult.endpointName})` });
                 dispatch({ type: 'PROCESS_COMPLETE' });
 
                 console.log("Cleaning up all active WebSocket subscriptions after first confirmation.");
