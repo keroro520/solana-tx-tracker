@@ -7,9 +7,12 @@ const initialState = {
   configStatus: 'Loading configuration...', // User-facing status message
   // configPath is effectively replaced by state.config.loadedPath after successful load
   isLoading: false,
+  isComplete: false, // New: To track if the entire transaction process is complete for UI conditional rendering
   globalStatus: 'Idle', // Overall status of the transaction process
   transactionSignature: null,
   createdAt: null,
+  transactionSentAt: null, // New: Timestamp when all RPCs are about to be sent
+  firstWsConfirmedAt: null, // New: Timestamp of the first WS confirmation
   results: [], // Array of { name, sendDuration, confirmationDuration, status, error? }
   globalError: null, // { message: string, type: 'config' | 'critical' }
   eventLog: [], // To store timestamped event messages
@@ -35,9 +38,12 @@ function appReducer(state, action) {
       return { 
         ...state, 
         isLoading: true, 
+        isComplete: false, // Reset on new process
         globalStatus: 'Initializing... Fetching blockhash... Creating transaction...', 
         transactionSignature: null, 
         createdAt: null, 
+        transactionSentAt: null, // Reset on new process
+        firstWsConfirmedAt: null, // Reset on new process
         results: [], // Clear previous results for the new process
         globalError: null // Clear previous process errors
       };
@@ -56,9 +62,9 @@ function appReducer(state, action) {
         return { ...state, results: [...state.results, action.payload] };
       }
     case 'PROCESS_COMPLETE':
-      return { ...state, isLoading: false, globalStatus: 'Process Complete.' };
+      return { ...state, isLoading: false, globalStatus: 'Process Complete.', isComplete: true };
     case 'PROCESS_ERROR': // For errors during the main process after config load
-      return { ...state, isLoading: false, globalStatus: `Error: ${action.payload.message}`, globalError: { message: action.payload.message, type: 'critical' } };
+      return { ...state, isLoading: false, globalStatus: `Error: ${action.payload.message}`, globalError: { message: action.payload.message, type: 'critical' }, isComplete: true }; // Also set isComplete true on error to show reports
     case 'SET_GLOBAL_ERROR':
       return { ...state, globalError: { message: action.payload.message, type: action.payload.type || 'critical' } };
     case 'CLEAR_GLOBAL_ERROR':
@@ -67,6 +73,16 @@ function appReducer(state, action) {
       return {
         ...state,
         eventLog: [...state.eventLog, { timestamp: action.payload.timestamp, message: action.payload.message }],
+      };
+    case 'SET_TRANSACTION_SENT_AT':
+      return {
+        ...state,
+        transactionSentAt: action.payload,
+      };
+    case 'SET_FIRST_WS_CONFIRMED_AT':
+      return {
+        ...state,
+        firstWsConfirmedAt: action.payload,
       };
     default:
       return state;

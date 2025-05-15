@@ -5,6 +5,8 @@ import { useAppContext } from './contexts/AppContext';
 import GlobalAlert from './components/GlobalAlert.jsx';
 import TransactionInfo from './components/TransactionInfo.jsx';
 import ConfigDisplay from './components/ConfigDisplay.jsx';
+import EventSummaryTable from './components/EventSummaryTable.jsx';
+import TransactionTimingsTable from './components/TransactionTimingsTable.jsx';
 import EventLog from './components/EventLog.jsx';
 import { 
   parsePrivateKey, 
@@ -33,6 +35,7 @@ async function loadAppConfiguration() {
 function App() {
   const { state, dispatch } = useAppContext();
   const activeSubscriptions = useRef([]); // To keep track of active WS subscriptions for potential cleanup
+  const firstWsConfirmedRef = useRef(false); // To track if first WS confirmation has been recorded
 
   useEffect(() => {
     const loadInitialConfig = async () => {
@@ -93,6 +96,14 @@ function App() {
     };
   }, [dispatch]);
 
+  useEffect(() => {
+    // Reset ref when isLoading becomes false (either process completed or was never started and then a config load finishes)
+    // This ensures that for the *next* transaction, we are ready to capture the first WS confirmation again.
+    if (state.isLoading === false) {
+        firstWsConfirmedRef.current = false;
+    }
+  }, [state.isLoading]);
+
   const handleSendTransaction = async () => {
     if (!state.config || !state.config.privateKey || !state.config.endpoints || state.config.endpoints.length === 0) {
       dispatch({ type: 'SET_GLOBAL_ERROR', payload: { message: 'Configuration is missing, invalid, or has no endpoints. Please check src/config/appConfig.js.', type: 'config' } });
@@ -100,6 +111,7 @@ function App() {
       return;
     }
     dispatch({ type: 'PROCESS_START' });
+    firstWsConfirmedRef.current = false; // Explicitly reset for the new transaction
     dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Processing started.' } });
     console.log("Send Transaction Clicked. Config Loaded From:", state.config.loadedPath);
 
@@ -162,12 +174,18 @@ function App() {
                 logMessage += ` Duration from send: ${confirmationResult.wsDurationMs} ms.`;
               }
             }
-            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: logMessage } });
+            const currentEventTimestamp = Date.now();
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: currentEventTimestamp, message: logMessage } });
             if (!confirmationResult.error) {
               confirmedCount++;
+              if (!firstWsConfirmedRef.current) {
+                dispatch({ type: 'SET_FIRST_WS_CONFIRMED_AT', payload: currentEventTimestamp });
+                firstWsConfirmedRef.current = true;
+              }
             }
-            if (confirmedCount === totalEndpoints || 
-                state.results.filter(r => r.status && !r.status.includes("Pending")).length === totalEndpoints) {
+            // Check if all endpoints have reported (either confirmed or error) or all expected confirmations received
+            const allResultsIn = state.results.filter(r => r.status && !r.status.includes("Pending") && !r.status.includes("Sending RPC...") && !r.status.includes("RPC Sent, Awaiting WS...")).length === totalEndpoints;
+            if (confirmedCount === totalEndpoints || allResultsIn) {
               dispatch({ type: 'PROCESS_COMPLETE' });
             }
           }
@@ -207,6 +225,7 @@ function App() {
       dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'All WebSocket subscriptions initiated. Now sending transaction to RPC endpoints.' } });
 
       const overallSentAt = Date.now(); // Timestamp for all parallel RPC operations start
+      dispatch({ type: 'SET_TRANSACTION_SENT_AT', payload: overallSentAt });
 
       // Update overallSentAt for existing subscriptions if subscribeToSignatureConfirmation needs it for duration
       // This is a bit tricky as subscriptions are already active. 
@@ -287,6 +306,20 @@ function App() {
       
       <EventLog events={state.eventLog} />
       
+      {state.isComplete && (
+        <div className="reports-section" style={{ marginTop: '20px', borderTop: '1px solid #ccc', paddingTop: '20px' }}>
+          <h2 style={{textAlign: 'center'}}>Transaction Reports</h2>
+          <TransactionTimingsTable
+            createdAt={state.createdAt}
+            sentAt={state.transactionSentAt}
+            confirmedAt={state.firstWsConfirmedAt}
+          />
+          <EventSummaryTable
+            events={state.eventLog}
+            endpointsConfig={state.config ? state.config.endpoints : []}
+          />
+        </div>
+      )}
     </div>
   );
 }
