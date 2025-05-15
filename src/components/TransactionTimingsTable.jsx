@@ -1,7 +1,12 @@
 import React from 'react';
 
 const TransactionTimingsTable = ({ allTransactionsData, network }) => {
-  const formatOptTimestamp = (ts) => ts ? new Date(ts).toISOString() : 'N/A';
+  const formatOptTimestamp = (ts) => {
+    if (!ts) return 'N/A';
+    const date = new Date(ts);
+    // Extracts the time part (HH:mm:ss.sssZ) from the ISO string
+    return date.toISOString().split('T')[1];
+  };
   const calculateDuration = (start, end) => {
     if (start && end) {
       const diff = new Date(end).getTime() - new Date(start).getTime();
@@ -25,7 +30,7 @@ const TransactionTimingsTable = ({ allTransactionsData, network }) => {
   const formatBlockTimestamp = (unixTimestamp) => {
     if (unixTimestamp === null || typeof unixTimestamp === 'undefined') return 'N/A';
     // Assuming unixTimestamp is in seconds
-    return new Date(unixTimestamp * 1000).toISOString();
+    return formatOptTimestamp(unixTimestamp * 1000)
   };
 
   if (!allTransactionsData || allTransactionsData.length === 0) {
@@ -46,9 +51,9 @@ const TransactionTimingsTable = ({ allTransactionsData, network }) => {
             <th style={{ textAlign: 'left' }}>#</th>
             <th style={{ textAlign: 'left' }}>TxSig</th>
             <th style={{ textAlign: 'left' }}>TxCreatedAt</th>
-            <th style={{ textAlign: 'left' }}>TxFirstSentAt (&lt;rpc endpointName&gt;)</th>
-            <th style={{ textAlign: 'left' }}>TxFirstConfirmedAt (&lt;ws endpointName&gt;)</th>
-            <th style={{ textAlign: 'left' }}>Block Timestamp</th>
+            <th style={{ textAlign: 'left' }}>TxFirstSentAt</th>
+            <th style={{ textAlign: 'left' }}>TxFirstConfirmedAt</th>
+            <th style={{ textAlign: 'left' }}>BlockTime</th>
             <th style={{ textAlign: 'left' }}>Confirmation Duration (Create to First WS Confirm)</th>
             <th style={{ textAlign: 'left' }}>Status</th>
           </tr>
@@ -71,8 +76,8 @@ const TransactionTimingsTable = ({ allTransactionsData, network }) => {
                 )}
               </td>
               <td>{formatOptTimestamp(txData.createdAt)}</td>
-              <td>{formatOptTimestamp(txData.sentAt)} {txData.firstSentToEndpointName ? `(${txData.firstSentToEndpointName})` : ''}</td>
-              <td>{formatOptTimestamp(txData.firstWsConfirmedAt)} {txData.firstConfirmedByEndpointName ? `(${txData.firstConfirmedByEndpointName})` : ''}</td>
+              <td>{formatOptTimestamp(txData.sentAt)} <br /> {txData.firstSentToEndpointName ? `(${txData.firstSentToEndpointName})` : ''}</td>
+              <td>{formatOptTimestamp(txData.firstWsConfirmedAt)} <br /> {txData.firstConfirmedByEndpointName ? `(${txData.firstConfirmedByEndpointName})` : ''}</td>
               <td>{formatBlockTimestamp(txData.blockTime)}</td>
               <td>{calculateDuration(txData.createdAt, txData.firstWsConfirmedAt)}</td>
               <td>{txData.error ? <span style={{ color: 'red' }}>Error: {txData.error}</span> : <span style={{ color: 'green'}}>Success</span>}</td>
