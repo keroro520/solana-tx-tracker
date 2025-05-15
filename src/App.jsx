@@ -17,16 +17,34 @@ import {
 // Updated config loading logic
 async function loadAppConfiguration() {
   let configModule;
-  let loadedConfigPath = 'src/config/appConfig.js'; // For display purposes
+  let configFileName;
+  let loadedConfigPathForImport; // Path for dynamic import
+
+  // Parse URL parameters
+  const queryParams = new URLSearchParams(window.location.search);
+  const networkParam = queryParams.get('network');
+
+  if (networkParam === 'mainnet') {
+    configFileName = 'mainnet.appConfig.js';
+  } else {
+    // Default to devnet if 'network' is not 'mainnet' or not specified
+    configFileName = 'devnet.appConfig.js';
+  }
+  // Construct the path relative to the current file (App.jsx is in src/)
+  loadedConfigPathForImport = `../config/${configFileName}`;
+
   try {
-    // Attempt to load the user's actual config file
-    configModule = await import('../config/appConfig.js');
+    // Attempt to load the configuration file
+    // The /* @vite-ignore */ comment tells Vite to not try to resolve this dynamic import at build time.
+    configModule = await import(/* @vite-ignore */ loadedConfigPathForImport);
   } catch (e) {
-      console.error("Failed to load appConfig.js: ", e);
-      throw new Error("Configuration file appConfig.js is missing or invalid.");
+      console.error(`Failed to load ${configFileName}: `, e);
+      // Use the import path in the error message for clarity on what was attempted
+      throw new Error(`Configuration file ${configFileName} is missing or invalid (tried to load from ${loadedConfigPathForImport}).`);
   }
   if (!configModule || !configModule.appConfig) {
-    throw new Error(`The configuration file (${loadedConfigPath}) did not export an 'appConfig' object.`);
+    // Use the import path here as well
+    throw new Error(`The configuration file (${loadedConfigPathForImport}) did not export an 'appConfig' object.`);
   }
 
   const rawConfig = configModule.appConfig;
@@ -61,7 +79,7 @@ async function loadAppConfiguration() {
     ...restOfConfig, 
     rpcUrls: rpcUrls,
     wsUrls: wsUrls,
-    loadedPath: loadedConfigPath 
+    loadedPath: `config/${configFileName}` // For display purposes, show relative to project root (e.g. config/devnet.appConfig.js)
   };
 }
 
@@ -349,22 +367,69 @@ function App() {
     dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Preparing to process ${numTransactionsToRun} transaction(s).` } });
     dispatch({ type: 'PROCESS_START_ALL' });
 
-    for (let i = 0; i < numTransactionsToRun; i++) {
+    let transactionsProcessed = 0; // Local transaction counter
+
+    while (transactionsProcessed < numTransactionsToRun) {
+      // Ensure we're using the right transaction index for UI purposes
+      const currentTxIndex = transactionsProcessed;
+      
+      dispatch({ type: 'LOG_EVENT', payload: { 
+        timestamp: Date.now(), 
+        message: `Starting transaction ${currentTxIndex + 1}/${numTransactionsToRun} (local counter: ${transactionsProcessed + 1})` 
+      }});
+      
       try {
-        // Ensure the loop uses the most up-to-date currentTransactionIndex from the state for logging and dispatching
-        // The actual index `i` is driving the loop, but state.currentTransactionIndex is what the reducer cycle relies on.
-        await executeSingleTransaction(state.currentTransactionIndex, numTransactionsToRun); // Pass numTransactionsToRun here
-        if (state.allProcessesComplete) {
-          console.log("All transactions processed successfully.");
-          break; 
+        // Wait for this transaction to complete, regardless of state updates
+        await executeSingleTransaction(currentTxIndex, numTransactionsToRun);
+        
+        // Log completion of this specific transaction
+        dispatch({ type: 'LOG_EVENT', payload: { 
+          timestamp: Date.now(), 
+          message: `Completed transaction ${currentTxIndex + 1}/${numTransactionsToRun}` 
+        }});
+        
+        // Increment our local counter
+        transactionsProcessed++;
+        
+        // Check if we've actually processed all transactions
+        if (transactionsProcessed >= numTransactionsToRun) {
+          console.log(`All ${numTransactionsToRun} transactions processed successfully.`);
+          break;
         }
       } catch (error) {
-        console.error(`Loop ${i} (Tx ${state.currentTransactionIndex +1}/${numTransactionsToRun}): Critical error from executeSingleTransaction, stopping. Error: ${error.message}`);
-        break;
+        console.error(`Transaction ${currentTxIndex + 1}/${numTransactionsToRun}: Critical error: ${error.message}`);
+        dispatch({ type: 'LOG_EVENT', payload: { 
+          timestamp: Date.now(), 
+          message: `Transaction ${currentTxIndex + 1}/${numTransactionsToRun} failed with error: ${error.message}` 
+        }});
+        
+        // Instead of immediately stopping, ask if we should continue
+        const shouldContinue = window.confirm(`Transaction ${currentTxIndex + 1} failed. Continue with remaining transactions?`);
+        if (!shouldContinue) {
+          dispatch({ type: 'LOG_EVENT', payload: { 
+            timestamp: Date.now(), 
+            message: `User chose to cancel remaining transactions after failure of transaction ${currentTxIndex + 1}/${numTransactionsToRun}` 
+          }});
+          break;
+        }
+        
+        // If continuing, increment our counter to move to next transaction
+        transactionsProcessed++;
       }
 
-      // sleep 2 seconds
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Only sleep between transactions if we have more to process
+      if (transactionsProcessed < numTransactionsToRun) {
+        dispatch({ type: 'LOG_EVENT', payload: { 
+          timestamp: Date.now(), 
+          message: `Waiting 2 seconds before processing next transaction...` 
+        }});
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+    
+    // If we've reached here, all requested transactions have been attempted
+    if (!state.allProcessesComplete) {
+      dispatch({ type: 'PROCESS_ALL_COMPLETE' });
     }
   };
 
