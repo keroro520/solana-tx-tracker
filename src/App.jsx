@@ -5,7 +5,6 @@ import { useAppContext } from './contexts/AppContext';
 import GlobalAlert from './components/GlobalAlert.jsx';
 import TransactionInfo from './components/TransactionInfo.jsx';
 import ConfigDisplay from './components/ConfigDisplay.jsx';
-import EventSummaryTable from './components/EventSummaryTable.jsx';
 import TransactionTimingsTable from './components/TransactionTimingsTable.jsx';
 import EventLog from './components/EventLog.jsx';
 import { 
@@ -383,12 +382,6 @@ function App() {
             createdAt={state.createdAt}
             sentAt={state.transactionSentAt}
             confirmedAt={state.firstWsConfirmedAt}
-          />
-          <EventSummaryTable
-            events={state.eventLog}
-            // Pass rpcUrls and wsUrls instead of endpointsConfig
-            rpcUrlsConfig={state.config ? state.config.rpcUrls : []}
-            wsUrlsConfig={state.config ? state.config.wsUrls : []}
           />
         </div>
       )}
