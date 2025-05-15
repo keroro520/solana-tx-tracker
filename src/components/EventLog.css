@@ -23,6 +23,8 @@
   padding: 8px 0;
   border-bottom: 1px solid #eee;
   display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
   font-size: 0.9em;
 }
 
@@ -35,9 +37,11 @@
   margin-right: 15px;
   color: #555;
   font-family: monospace;
+  text-align: left;
 }
 
 .event-message {
   color: #333;
   word-break: break-word; /* Ensure long messages wrap */
+  text-align: left;
 } 
