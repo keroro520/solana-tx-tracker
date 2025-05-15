@@ -3,7 +3,7 @@ import './EventLog.css';
 
 function EventLog({ events }) {
   if (!events || events.length === 0) {
-    return <p>No events to display.</p>;
+    return <p></p>;
   }
 
   const formatTimestamp = (timestamp) => {
