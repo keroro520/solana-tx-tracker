@@ -142,10 +142,10 @@ export async function subscribeToSignatureConfirmation(
   endpointName, 
   overallSentAt, 
   onConfirmation,
-  timeoutMs = 30000 // Default timeout 30 seconds
+  timeoutMs = 100000 // Default timeout 30 seconds
 ) {
   const wsSubscribedAt = Date.now();
-  console.log(`Subscribing to signature ${transactionSignature} on ${endpointName} at ${new Date(wsSubscribedAt).toISOString()} with timeout ${timeoutMs}ms`);
+  console.log(`Subscribing to signature ${transactionSignature} on ${endpointName}}`);
   
   let timeoutId = null;
   let subId = null; // To store the subscription ID for cleanup
