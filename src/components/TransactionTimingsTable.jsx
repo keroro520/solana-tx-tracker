@@ -1,13 +1,6 @@
 import React from 'react';
 
-const TransactionTimingsTable = ({
-  signature,
-  createdAt,
-  firstSentAt,
-  firstSentToEndpointName,
-  firstConfirmedAt,
-  firstConfirmedByEndpointName,
-}) => {
+const TransactionTimingsTable = ({ allTransactionsData }) => {
   const formatOptTimestamp = (ts) => ts ? new Date(ts).toISOString() : 'N/A';
   const calculateDuration = (start, end) => {
     if (start && end) {
@@ -18,8 +11,18 @@ const TransactionTimingsTable = ({
   };
 
   const shortenSignature = (sig) => {
+    if (!sig) return 'N/A';
     return `${sig.substring(0, 4)}...${sig.substring(sig.length - 4)}`;
   };
+
+  if (!allTransactionsData || allTransactionsData.length === 0) {
+    return (
+      <div className="transaction-timings-table" style={{ marginBottom: '20px' }}>
+        <h3>Transaction Timings</h3>
+        <p>No transaction data to display.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="transaction-timings-table" style={{ marginBottom: '20px' }}>
@@ -27,33 +30,39 @@ const TransactionTimingsTable = ({
       <table border="1" style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr>
+            <th style={{ textAlign: 'left' }}>#</th>
             <th style={{ textAlign: 'left' }}>TxSig</th>
             <th style={{ textAlign: 'left' }}>TxCreatedAt</th>
             <th style={{ textAlign: 'left' }}>TxFirstSentAt (&lt;rpc endpointName&gt;)</th>
             <th style={{ textAlign: 'left' }}>TxFirstConfirmedAt (&lt;ws endpointName&gt;)</th>
             <th style={{ textAlign: 'left' }}>Confirmation Duration (Create to First WS Confirm)</th>
+            <th style={{ textAlign: 'left' }}>Status</th>
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>
-              {signature ? (
-                <a 
-                  href={`https://solscan.io/tx/${signature}?cluster=devnet`} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                >
-                  {shortenSignature(signature)}
-                </a>
-              ) : (
-                'N/A'
-              )}
-            </td>
-            <td>{formatOptTimestamp(createdAt)}</td>
-            <td>{formatOptTimestamp(firstSentAt)} {firstSentToEndpointName ? `(${firstSentToEndpointName})` : ''}</td>
-            <td>{formatOptTimestamp(firstConfirmedAt)} {firstConfirmedByEndpointName ? `(${firstConfirmedByEndpointName})` : ''}</td>
-            <td>{calculateDuration(createdAt, firstConfirmedAt)}</td>
-          </tr>
+          {allTransactionsData.map((txData, index) => (
+            <tr key={txData.signature || index}>
+              <td>{index + 1}</td>
+              <td>
+                {txData.signature && !txData.error ? (
+                  <a 
+                    href={`https://solscan.io/tx/${txData.signature}?cluster=devnet`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                  >
+                    {shortenSignature(txData.signature)}
+                  </a>
+                ) : (
+                  shortenSignature(txData.signature) // Show signature even if errored, or N/A if no sig
+                )}
+              </td>
+              <td>{formatOptTimestamp(txData.createdAt)}</td>
+              <td>{formatOptTimestamp(txData.sentAt)} {txData.firstSentToEndpointName ? `(${txData.firstSentToEndpointName})` : ''}</td>
+              <td>{formatOptTimestamp(txData.firstWsConfirmedAt)} {txData.firstConfirmedByEndpointName ? `(${txData.firstConfirmedByEndpointName})` : ''}</td>
+              <td>{calculateDuration(txData.createdAt, txData.firstWsConfirmedAt)}</td>
+              <td>{txData.error ? <span style={{ color: 'red' }}>Error: {txData.error}</span> : <span style={{ color: 'green'}}>Success</span>}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>

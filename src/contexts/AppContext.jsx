@@ -19,6 +19,12 @@ const initialState = {
   wsConfirmationResults: [], // New: Array of { name, url, status, confirmationContextSlot, wsDurationMs, error, overallSentAtForDurCalc, confirmedAt }
   globalError: null, // { message: string, type: 'config' | 'critical' }
   eventLog: [], // To store timestamped event messages
+
+  // --- New state for multiple transactions ---
+  numberOfTransactions: 1,
+  currentTransactionIndex: 0,
+  allTransactionResults: [], // Stores results for each transaction: { signature, createdAt, sentAt, firstWsConfirmedAt, rpcResults, wsResults, eventLogSliceStart, eventLogSliceEnd }
+  allProcessesComplete: false, // True when all 'n' transactions are done
 };
 
 function appReducer(state, action) {
@@ -37,24 +43,50 @@ function appReducer(state, action) {
         configStatus: `Error loading configuration: ${action.payload.message}`,
         globalError: { message: `Config Error: ${action.payload.message}`, type: 'config' } 
       };
-    case 'PROCESS_START':
+    case 'SET_NUMBER_OF_TRANSACTIONS':
+      return {
+        ...state,
+        numberOfTransactions: Math.max(1, parseInt(action.payload, 10) || 1), // Ensure it's at least 1
+      };
+    case 'PROCESS_START_ALL': // Renamed from PROCESS_START to signify start of all N transactions
       return { 
         ...state, 
         isLoading: true, 
-        isComplete: false,
-        globalStatus: 'Initializing... Fetching blockhash... Creating transaction...', 
+        isComplete: false, // Individual transaction complete
+        allProcessesComplete: false, // All N transactions complete
+        currentTransactionIndex: 0,
+        allTransactionResults: [],
+        // Reset states for the first transaction
+        globalStatus: `Starting Transaction 1 of ${state.numberOfTransactions}... Initializing...`, 
         transactionSignature: null, 
         createdAt: null, 
         transactionSentAt: null,
         firstWsConfirmedAt: null,
         firstSentToEndpointName: null, 
         firstConfirmedByEndpointName: null,
-        rpcSendResults: [], // Clear previous RPC results
-        wsConfirmationResults: [], // Clear previous WS results
-        globalError: null
+        rpcSendResults: [], 
+        wsConfirmationResults: [], 
+        globalError: null,
+        // eventLog: [], // Optionally clear global event log or manage slices per transaction
+      };
+    case 'PROCESS_START_SINGLE_TX': // New action to reset state for each new transaction in the loop
+      return {
+        ...state,
+        isLoading: true, // Still loading overall
+        isComplete: false, // This specific transaction is not complete
+        globalStatus: `Starting Transaction ${state.currentTransactionIndex + 1} of ${state.numberOfTransactions}... Initializing...`,
+        transactionSignature: null,
+        createdAt: null,
+        transactionSentAt: null,
+        firstWsConfirmedAt: null,
+        firstSentToEndpointName: null,
+        firstConfirmedByEndpointName: null,
+        rpcSendResults: [],
+        wsConfirmationResults: [],
+        globalError: null, // Clear errors from previous transaction in the series
       };
     case 'SET_TX_INFO':
-      return { ...state, transactionSignature: action.payload.signature, createdAt: action.payload.createdAt, globalStatus: 'Transaction created. Sending to RPCs & Subscribing to WebSockets...' };
+      return { ...state, transactionSignature: action.payload.signature, createdAt: action.payload.createdAt, globalStatus: `Tx ${state.currentTransactionIndex + 1}/${state.numberOfTransactions}: Created. Sending/Subscribing...` };
     case 'SET_GLOBAL_STATUS':
       return { ...state, globalStatus: action.payload };
     
@@ -84,10 +116,78 @@ function appReducer(state, action) {
       return { ...state, wsConfirmationResults: newWsConfirmationResults };
     }
 
-    case 'PROCESS_COMPLETE':
-      return { ...state, isLoading: false, globalStatus: 'Process Complete.', isComplete: true };
+    case 'PROCESS_SINGLE_TX_COMPLETE': { // Renamed from PROCESS_COMPLETE
+      const newResult = {
+        signature: state.transactionSignature,
+        createdAt: state.createdAt,
+        sentAt: state.transactionSentAt,
+        firstSentToEndpointName: state.firstSentToEndpointName,
+        firstWsConfirmedAt: state.firstWsConfirmedAt,
+        firstConfirmedByEndpointName: state.firstConfirmedByEndpointName,
+        rpcSendResults: [...state.rpcSendResults],
+        wsConfirmationResults: [...state.wsConfirmationResults],
+        error: null, // Explicitly set error to null for successful completion
+      };
+      const updatedAllTransactionResults = [...state.allTransactionResults, newResult];
+
+      if (state.currentTransactionIndex < state.numberOfTransactions - 1) {
+        return {
+          ...state,
+          // isLoading: true, // Stays true as we move to the next
+          isComplete: true, // Current transaction is complete
+          allTransactionResults: updatedAllTransactionResults,
+          currentTransactionIndex: state.currentTransactionIndex + 1,
+          globalStatus: `Tx ${state.currentTransactionIndex + 1}/${state.numberOfTransactions} complete. Preparing next...`,
+          // State for next transaction will be reset by 'PROCESS_START_SINGLE_TX'
+        };
+      } else {
+        // All transactions are complete
+        return {
+          ...state,
+          isLoading: false,
+          isComplete: true, // Marks the current (last) tx as complete
+          allProcessesComplete: true, // Marks all N tx as complete
+          allTransactionResults: updatedAllTransactionResults,
+          globalStatus: `All ${state.numberOfTransactions} transactions complete.`,
+        };
+      }
+    }
     case 'PROCESS_ERROR': // For errors during the main process after config load
-      return { ...state, isLoading: false, globalStatus: `Error: ${action.payload.message}`, globalError: { message: action.payload.message, type: 'critical' }, isComplete: true }; // Also set isComplete true on error to show reports
+      const sigToFind = state.transactionSignature;
+      const existingTxIndex = sigToFind ? state.allTransactionResults.findIndex(tx => tx.signature === sigToFind) : -1;
+
+      let updatedErrorResults;
+      if (existingTxIndex > -1) {
+        updatedErrorResults = [...state.allTransactionResults];
+        updatedErrorResults[existingTxIndex] = {
+          ...updatedErrorResults[existingTxIndex],
+          error: action.payload.message, // Add/update error message
+        };
+      } else {
+        // No existing entry, or no signature to find by, create a new error entry
+        const errorResultEntry = {
+          signature: sigToFind || 'N/A',
+          error: action.payload.message,
+          createdAt: state.createdAt, 
+          sentAt: state.transactionSentAt,
+          firstSentToEndpointName: state.firstSentToEndpointName,
+          firstWsConfirmedAt: state.firstWsConfirmedAt,
+          firstConfirmedByEndpointName: state.firstConfirmedByEndpointName,
+          rpcSendResults: [...state.rpcSendResults],
+          wsConfirmationResults: [...state.wsConfirmationResults],
+        };
+        updatedErrorResults = [...state.allTransactionResults, errorResultEntry];
+      }
+
+      return { 
+        ...state, 
+        isLoading: false, 
+        globalStatus: `Error on Tx ${state.currentTransactionIndex + 1}/${state.numberOfTransactions}: ${action.payload.message}. Halting further transactions.`, 
+        globalError: { message: action.payload.message, type: 'critical' }, 
+        isComplete: true, // Marks the current tx attempt as 'complete' (due to error)
+        allProcessesComplete: true, // No more transactions will be processed
+        allTransactionResults: updatedErrorResults, 
+      };
     case 'SET_GLOBAL_ERROR':
       return { ...state, globalError: { message: action.payload.message, type: action.payload.type || 'critical' } };
     case 'CLEAR_GLOBAL_ERROR':

@@ -68,14 +68,18 @@ async function loadAppConfiguration() {
 function App() {
   const { state, dispatch } = useAppContext();
   const activeSubscriptions = useRef([]); // To keep track of active WS subscriptions for potential cleanup
-  const firstWsConfirmedRef = useRef(false); // To track if first WS confirmation has been recorded
+  const firstWsConfirmedRef = useRef(false); // To track if first WS confirmation has been recorded for the CURRENT transaction
+  const localNumberOfTransactionsRef = useRef(state.numberOfTransactions); // For the input field
+
+  useEffect(() => {
+    localNumberOfTransactionsRef.current = state.numberOfTransactions;
+  }, [state.numberOfTransactions]);
 
   useEffect(() => {
     const loadInitialConfig = async () => {
       try {
         const configData = await loadAppConfiguration();
         dispatch({ type: 'LOAD_CONFIG_SUCCESS', payload: configData });
-        // dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.INFO: Config loaded: ${configData.loadedPath}` } });
       } catch (error) {
         dispatch({ type: 'LOAD_CONFIG_ERROR', payload: { message: error.message, path: 'N/A' } });
         dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.ERROR: Config load error: ${error.message}` } });
@@ -83,13 +87,11 @@ function App() {
     };
     loadInitialConfig();
 
-    // Store original console methods
     const originalConsoleLog = console.log;
     const originalConsoleError = console.error;
     const originalConsoleWarn = console.warn;
     const originalConsoleInfo = console.info;
 
-    // Override console methods
     console.log = (...args) => {
       originalConsoleLog.apply(console, args);
       const message = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
@@ -111,17 +113,14 @@ function App() {
       dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `${message}` } });
     };
 
-    // Cleanup subscriptions and restore console on component unmount
     return () => {
       activeSubscriptions.current.forEach(({ connection, subId }) => {
         if (connection && typeof connection.removeSignatureListener === 'function') {
-          originalConsoleLog("Cleaning up App: Removing subscription ID:", subId); // Use original log for cleanup phase
+          originalConsoleLog("Cleaning up App: Removing subscription ID:", subId);
           connection.removeSignatureListener(subId);
         }
       });
       activeSubscriptions.current = [];
-
-      // Restore original console methods
       console.log = originalConsoleLog;
       console.error = originalConsoleError;
       console.warn = originalConsoleWarn;
@@ -129,32 +128,13 @@ function App() {
     };
   }, [dispatch]);
 
-  useEffect(() => {
-    // Reset ref when isLoading becomes false (either process completed or was never started and then a config load finishes)
-    // This ensures that for the *next* transaction, we are ready to capture the first WS confirmation again.
-    if (state.isLoading === false) {
-        firstWsConfirmedRef.current = false;
-    }
-  }, [state.isLoading]);
+  const executeSingleTransaction = async (txIndex, totalTx) => {
+    dispatch({ type: 'PROCESS_START_SINGLE_TX' });
+    firstWsConfirmedRef.current = false; // Reset for this specific transaction execution
 
-  const handleSendTransaction = async () => {
-    // Initial Validations and Setup (dispatch PROCESS_START, clear old subs, parse key)
-    if (!state.config || 
-        !state.config.privateKey || 
-        !state.config.rpcUrls || state.config.rpcUrls.length === 0 ||
-        !state.config.wsUrls || state.config.wsUrls.length === 0
-    ) {
-      dispatch({ type: 'SET_GLOBAL_ERROR', payload: { message: 'Configuration is missing, invalid, or has no RPC/WS URLs. Please check src/config/appConfig.js.', type: 'config' } });
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Error: Configuration missing, invalid, or no RPC/WS URLs.' } });
-      return;
-    }
-    dispatch({ type: 'PROCESS_START' });
-    firstWsConfirmedRef.current = false;
-
-    // Clear previous subscriptions (important if user clicks again before full cleanup)
     activeSubscriptions.current.forEach(({ connection, subId }) => {
         if (connection && typeof connection.removeSignatureListener === 'function') {
-            console.log("(Re-run) Clearing old subscription ID:", subId);
+            console.log(`(Tx ${txIndex + 1}) Clearing old subscription ID:`, subId);
             connection.removeSignatureListener(subId);
         }
     });
@@ -172,7 +152,7 @@ function App() {
       const secretKeyUint8Array = parsePrivateKey(state.config.privateKey);
       sourceKeypair = Keypair.fromSecretKey(secretKeyUint8Array);
       
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating initial RPC connection to ${creationRpcUrl} for transaction creation.` } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Creating initial RPC connection to ${creationRpcUrl} for transaction creation.` } });
       initialRpcConnection = new Connection(creationRpcUrl, 'confirmed');
       
       const { transaction, signature, createdAt } = await createSimpleTransferTransaction(initialRpcConnection, sourceKeypair);
@@ -181,14 +161,13 @@ function App() {
       serializedTransaction = transaction.serialize();
       
       dispatch({ type: 'SET_TX_INFO', payload: { signature: transactionSignatureB58, createdAt: txCreatedAt } });
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Transaction created: ${transactionSignatureB58}.` } });
-      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Transaction created. Initiating communications...' });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Transaction created: ${transactionSignatureB58}.` } });
+      dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Tx ${txIndex + 1}/${totalTx}: Created. Initiating communications...` });
 
       const overallStartTime = Date.now();
-      dispatch({ type: 'SET_TRANSACTION_SENT_AT', payload: overallStartTime }); // General start for activities
+      dispatch({ type: 'SET_TRANSACTION_SENT_AT', payload: overallStartTime });
 
-      // --- Initiate ALL WebSocket Subscriptions Concurrently ---
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Initiating all WebSocket subscriptions concurrently.' } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Initiating all WebSocket subscriptions concurrently.` } });
       const wsPromises = state.config.wsUrls.map(wsConfig => {
         dispatch({
           type: 'UPDATE_WS_CONFIRMATION_RESULT',
@@ -200,7 +179,7 @@ function App() {
           }
         });
         const wsConnection = new Connection(creationRpcUrl, { wsEndpoint: wsConfig.url, commitment: 'confirmed' });
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending WebSocket subscription request to ${wsConfig.name}.` } });
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Sending WebSocket subscription request to ${wsConfig.name}.` } });
         
         return subscribeToSignatureConfirmation(
           wsConnection,
@@ -208,14 +187,17 @@ function App() {
           wsConfig.name,
           overallStartTime, 
           (confirmationResult) => {
+            // Check if a WS confirmation for THIS transaction has already been processed.
+            // state.isComplete refers to the current transaction's completion status.
+            // firstWsConfirmedRef.current ensures only the first one through this block processes.
             if (firstWsConfirmedRef.current && state.isComplete) {
-                console.log(`WS Conf from ${confirmationResult.endpointName} received, but process already marked complete. Ignoring.`);
+                console.log(`Tx ${txIndex + 1}/${totalTx}: WS Conf from ${confirmationResult.endpointName} (sig: ${transactionSignatureB58.substring(0,6)}...) received, but first confirmation already processed or tx marked complete. Ignoring.`);
                 return;
             }
 
             dispatch({ type: 'UPDATE_WS_CONFIRMATION_RESULT', payload: confirmationResult });
             
-            let logMessage = `WebSocket message received from ${confirmationResult.endpointName}: `;
+            let logMessage = `Tx ${txIndex + 1}/${totalTx} - WebSocket message received from ${confirmationResult.endpointName} (sig: ${transactionSignatureB58.substring(0,6)}...): `;
             if (confirmationResult.error) {
               logMessage += `Error: ${confirmationResult.error.message}. Raw error: ${JSON.stringify(confirmationResult.rawError || confirmationResult.error)}`;
             } else {
@@ -228,22 +210,23 @@ function App() {
             dispatch({ type: 'LOG_EVENT', payload: { timestamp: currentEventTimestamp, message: logMessage } });
 
             if (!confirmationResult.error) {
+              // This inner check is critical: only the very first confirmation should proceed.
               if (!firstWsConfirmedRef.current) {
-                console.log(`First WS confirmation from ${confirmationResult.endpointName}. Completing process.`);
-                firstWsConfirmedRef.current = true;
+                console.log(`Tx ${txIndex + 1}/${totalTx}: First WS confirmation from ${confirmationResult.endpointName} (sig: ${transactionSignatureB58.substring(0,6)}...). Completing this transaction.`);
+                firstWsConfirmedRef.current = true; // Guard set: This is the one!
                 dispatch({ type: 'SET_FIRST_WS_CONFIRMED_AT', payload: { timestamp: currentEventTimestamp, endpointName: confirmationResult.endpointName } });
-                dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Process Complete (First WS Confirmation via ${confirmationResult.endpointName})` });
-                dispatch({ type: 'PROCESS_COMPLETE' });
+                dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Tx ${txIndex + 1}/${totalTx}: Complete (First WS Confirmation via ${confirmationResult.endpointName})` });
+                dispatch({ type: 'PROCESS_SINGLE_TX_COMPLETE' });
 
-                console.log("Cleaning up all active WebSocket subscriptions after first confirmation.");
+                console.log(`Tx ${txIndex + 1}/${totalTx}: Cleaning up all active WebSocket subscriptions after first confirmation (sig: ${transactionSignatureB58.substring(0,6)}...).`);
                 activeSubscriptions.current.forEach(({ connection: subConn, subId, name: subName }) => {
                   if (subConn && typeof subConn.removeSignatureListener === 'function') {
-                    console.log(`Removing listener for ${subName}, Sub ID: ${subId}`);
+                    console.log(`Tx ${txIndex + 1}/${totalTx}: Removing listener for ${subName}, Sub ID: ${subId}`);
                     subConn.removeSignatureListener(subId);
                   }
                 });
                 activeSubscriptions.current = []; 
-                return;
+                return; // IMPORTANT: Exit callback after processing the first confirmation.
               }
             } 
           }
@@ -251,8 +234,7 @@ function App() {
         .then(subIdObj => {
           if (subIdObj && !subIdObj.error && subIdObj.subId !== undefined) {
             activeSubscriptions.current.push({ connection: subIdObj.wsConnection, subId: subIdObj.subId, name: subIdObj.wsName });
-            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `WebSocket subscription request processed for ${subIdObj.wsName}, Sub ID: ${subIdObj.subId}.` } });
-            // Update status only if not already completed by another faster WS
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: WebSocket subscription request processed for ${subIdObj.wsName}, Sub ID: ${subIdObj.subId}.` } });
             if (!firstWsConfirmedRef.current) {
                 dispatch({
                   type: 'UPDATE_WS_CONFIRMATION_RESULT',
@@ -264,8 +246,8 @@ function App() {
           return subIdObj; 
         })
         .catch(subError => {
-            console.error(`Critical error setting up subscription promise for ${wsConfig.name}:`, subError);
-            if (!firstWsConfirmedRef.current || !state.isComplete) { // Avoid updating if already completed
+            console.error(`Tx ${txIndex + 1}/${totalTx}: Critical error setting up subscription promise for ${wsConfig.name}:`, subError);
+            if (!firstWsConfirmedRef.current && !state.isComplete) { 
                 dispatch({ 
                     type: 'UPDATE_WS_CONFIRMATION_RESULT', 
                     payload: { 
@@ -277,13 +259,12 @@ function App() {
                     }
                 });
             }
-            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Critical error subscribing to WebSocket for ${wsConfig.name}: ${subError.message}` } });
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Critical error subscribing to WebSocket for ${wsConfig.name}: ${subError.message}` } });
             return { wsName: wsConfig.name, error: subError };
         });
       });
 
-      // --- Initiate ALL RPC Sends Concurrently (Fire-and-Forget style for each) ---
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Initiating all RPC sends concurrently.' } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Initiating all RPC sends concurrently.` } });
       state.config.rpcUrls.forEach(rpcConfig => {
         dispatch({
           type: 'UPDATE_RPC_SEND_RESULT',
@@ -295,56 +276,46 @@ function App() {
           }
         });
         const rpcConnection = new Connection(rpcConfig.url, 'confirmed');
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending RPC to ${rpcConfig.name}...` } });
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Sending RPC to ${rpcConfig.name}...` } });
         
-        // Assuming sendTransactionToRpc might be the first point an RPC is known to be sent
-        // We need a mechanism to identify the *first* successful (or attempted) send for the timing table.
-        // For simplicity, we'll use the overallStartTime for TxFirstSentAt and the name of the *first RPC in the config* 
-        // as the one it was "first sent to". This is a simplification.
-        // A more accurate approach would be to capture the actual first send time from sendTransactionToRpc, 
-        // but that utility currently doesn't return the exact send initiation time for the *first* send across all calls.
         if (state.config.rpcUrls.indexOf(rpcConfig) === 0) {
             dispatch({ type: 'SET_TRANSACTION_SENT_AT', payload: { timestamp: overallStartTime, endpointName: rpcConfig.name } });
         }
 
         sendTransactionToRpc(rpcConnection, serializedTransaction, rpcConfig.name)
           .then(rpcResult => {
-            // sendTransactionToRpc should dispatch its own UPDATE_RPC_SEND_RESULT upon completion.
-            // This .then is for any additional logging or actions if necessary.
-            // const message = rpcResult.rpcSignatureOrError instanceof Error ? `Async RPC Send for ${rpcResult.endpointName} completed with error: ${rpcResult.rpcSignatureOrError.message}` : `Async RPC Send to ${rpcResult.endpointName} completed. Signature: ${rpcResult.rpcSignatureOrError}.`;
-            // dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message } });
+            // Handled by reducer
           })
           .catch(error => {
-            console.error(`Unhandled error from sendTransactionToRpc promise for ${rpcConfig.name}:`, error);
-            dispatch({ 
-              type: 'UPDATE_RPC_SEND_RESULT', 
-              payload: { 
-                name: rpcConfig.name, 
-                url: rpcConfig.url, 
-                status: `RPC Critical Error: ${error.message}`,
-                error: { message: error.message }, 
-                sentAt: overallStartTime 
-              }
-            });
-            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Critical unhandled error in RPC send for ${rpcConfig.name}: ${error.message}` } });
+            console.error(`Tx ${txIndex + 1}/${totalTx}: Unhandled error from sendTransactionToRpc promise for ${rpcConfig.name}:`, error);
+            if (!state.isComplete) { 
+                dispatch({ 
+                  type: 'UPDATE_RPC_SEND_RESULT', 
+                  payload: { 
+                    name: rpcConfig.name, 
+                    url: rpcConfig.url, 
+                    status: `RPC Critical Error: ${error.message}`,
+                    error: { message: error.message }, 
+                    sentAt: overallStartTime 
+                  }
+                });
+            }
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Critical unhandled error in RPC send for ${rpcConfig.name}: ${error.message}` } });
           });
       });
 
-      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'All RPC sends and WebSocket subscriptions initiated. Awaiting first WS confirmation...' });
+      dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Tx ${txIndex + 1}/${totalTx}: All RPC sends and WebSocket subscriptions initiated. Awaiting first WS confirmation...` });
 
-      // --- Fallback Completion Logic: After all WS Setups Attempted ---
-      Promise.allSettled(wsPromises).then(() => {
-        // Check if state.isLoading is true to prevent this from running if already completed by a fast WS confirm.
-        // Also check firstWsConfirmedRef again, as it might have just been set by a WS callback.
-        if (state.isLoading && !firstWsConfirmedRef.current) { 
-          console.log("All WS subscription attempts settled. No single WS confirmed first during setup phase. Completing process.");
-          dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Process Complete (No immediate WS confirmation; check individual statuses).' });
-          dispatch({ type: 'PROCESS_COMPLETE' });
+      await Promise.allSettled(wsPromises).then(() => {
+        if (state.isLoading && !firstWsConfirmedRef.current && !state.isComplete) { 
+          console.log(`Tx ${txIndex + 1}/${totalTx}: All WS subscription attempts settled. No single WS confirmed first. Completing this transaction (fallback) (sig: ${transactionSignatureB58.substring(0,6)}...).`);
+          dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Tx ${txIndex + 1}/${totalTx}: Complete (No immediate WS confirmation; check individual statuses).` });
+          dispatch({ type: 'PROCESS_SINGLE_TX_COMPLETE' });
           
-          console.log("Cleaning up any remaining WebSocket subscriptions (fallback).");
+          console.log(`Tx ${txIndex + 1}/${totalTx}: Cleaning up any remaining WebSocket subscriptions (fallback) (sig: ${transactionSignatureB58.substring(0,6)}...).`);
           activeSubscriptions.current.forEach(({ connection: subConn, subId, name: subName }) => {
             if (subConn && typeof subConn.removeSignatureListener === 'function') {
-              console.log(`(Fallback Cleanup) Removing listener for ${subName}, Sub ID: ${subId}`);
+              console.log(`Tx ${txIndex + 1}/${totalTx}: (Fallback Cleanup) Removing listener for ${subName}, Sub ID: ${subId}`);
               subConn.removeSignatureListener(subId);
             }
           });
@@ -353,13 +324,50 @@ function App() {
       });
 
     } catch (error) {
-      console.error("Error during transaction processing setup:", error);
-      // Avoid double PROCESS_ERROR if already completed by a WS or fallback.
+      console.error(`Tx ${txIndex + 1}/${totalTx}: Error during transaction processing setup:`, error);
       if (state.isLoading && !state.isComplete) { 
         dispatch({ type: 'PROCESS_ERROR', payload: { message: error.message } });
       }
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Critical error during transaction processing: ${error.message}` } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Tx ${txIndex + 1}/${totalTx}: Critical error during transaction processing: ${error.message}` } });
+      throw error;
     }
+  };
+
+  const handleSendTransaction = async () => {
+    if (!state.config || 
+        !state.config.privateKey || 
+        !state.config.rpcUrls || state.config.rpcUrls.length === 0 ||
+        !state.config.wsUrls || state.config.wsUrls.length === 0
+    ) {
+      dispatch({ type: 'SET_GLOBAL_ERROR', payload: { message: 'Configuration is missing, invalid, or has no RPC/WS URLs. Please check src/config/appConfig.js.', type: 'config' } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Error: Configuration missing, invalid, or no RPC/WS URLs.' } });
+      return;
+    }
+
+    const numTransactionsToRun = localNumberOfTransactionsRef.current;
+    dispatch({ type: 'SET_NUMBER_OF_TRANSACTIONS', payload: numTransactionsToRun });
+    dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Preparing to process ${numTransactionsToRun} transaction(s).` } });
+    dispatch({ type: 'PROCESS_START_ALL' });
+
+    for (let i = 0; i < numTransactionsToRun; i++) {
+      try {
+        // Ensure the loop uses the most up-to-date currentTransactionIndex from the state for logging and dispatching
+        // The actual index `i` is driving the loop, but state.currentTransactionIndex is what the reducer cycle relies on.
+        await executeSingleTransaction(state.currentTransactionIndex, numTransactionsToRun); // Pass numTransactionsToRun here
+        if (state.allProcessesComplete) {
+          console.log("All transactions processed successfully.");
+          break; 
+        }
+      } catch (error) {
+        console.error(`Loop ${i} (Tx ${state.currentTransactionIndex +1}/${numTransactionsToRun}): Critical error from executeSingleTransaction, stopping. Error: ${error.message}`);
+        break;
+      }
+    }
+  };
+
+  const handleNumberOfTransactionsChange = (e) => {
+    const value = parseInt(e.target.value, 10);
+    localNumberOfTransactionsRef.current = isNaN(value) ? 1 : Math.max(1, value); 
   };
 
   return (
@@ -371,26 +379,39 @@ function App() {
       <GlobalAlert error={state.globalError} onDismiss={() => dispatch({ type: 'CLEAR_GLOBAL_ERROR' })} />
 
       <div className="controls-area" style={{ marginBottom: '20px' }}>
+        <label htmlFor="numTransactions" style={{ marginRight: '10px' }}>Number of Transactions:</label>
+        <input 
+          type="number" 
+          id="numTransactions" 
+          // Use defaultValue for uncontrolled component behavior if not dispatching onChange, 
+          // or ensure value is updated from state if it becomes controlled.
+          // For now, local ref drives it, committed on send.
+          defaultValue={localNumberOfTransactionsRef.current} 
+          onChange={handleNumberOfTransactionsChange} 
+          min="1"
+          disabled={state.isLoading} 
+          style={{ marginRight: '20px', width: '60px' }}
+        />
         <button onClick={handleSendTransaction} disabled={state.isLoading || !state.config}>
-          {state.isLoading ? 'Processing...' : 'Send Transaction'}
+          {state.isLoading ? `Processing Tx ${state.currentTransactionIndex + 1} of ${state.numberOfTransactions}...` : 'Send Transaction(s)'}
         </button>
         {state.isLoading && <span className="spinner"></span>}
       </div>
 
-      <TransactionInfo signature={state.transactionSignature} createdAt={state.createdAt} />
+      {(state.isLoading || state.allProcessesComplete && state.allTransactionResults.length > 0) && (
+        <TransactionInfo 
+          signature={state.transactionSignature || (state.allTransactionResults.length > 0 ? state.allTransactionResults[state.allTransactionResults.length -1].signature : null) }
+          createdAt={state.createdAt || (state.allTransactionResults.length > 0 ? state.allTransactionResults[state.allTransactionResults.length -1].createdAt : null)}
+        />
+      )}
       
       <EventLog events={state.eventLog} />
       
-      {state.isComplete && (
+      {state.allProcessesComplete && state.allTransactionResults.length > 0 && (
         <div className="reports-section" style={{ marginTop: '20px', borderTop: '1px solid #ccc', paddingTop: '20px' }}>
-          <h2 style={{textAlign: 'center'}}>Transaction Reports</h2>
+          <h2 style={{textAlign: 'center'}}>Transaction Reports ({state.allTransactionResults.length} Processed)</h2>
           <TransactionTimingsTable
-            signature={state.transactionSignature}
-            createdAt={state.createdAt}
-            firstSentAt={state.transactionSentAt} // This will now be an object { timestamp, endpointName } or just timestamp
-            firstSentToEndpointName={state.firstSentToEndpointName} // This is the new state field
-            firstConfirmedAt={state.firstWsConfirmedAt} // This will now be an object { timestamp, endpointName }
-            firstConfirmedByEndpointName={state.firstConfirmedByEndpointName} // This is the new state field
+            allTransactionsData={state.allTransactionResults} 
           />
         </div>
       )}
