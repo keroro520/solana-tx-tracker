@@ -466,15 +466,6 @@ function App() {
         {state.isLoading && <span className="spinner"></span>}
       </div>
 
-      {(state.isLoading || state.allProcessesComplete && state.allTransactionResults.length > 0) && (
-        <TransactionInfo 
-          signature={state.transactionSignature || (state.allTransactionResults.length > 0 ? state.allTransactionResults[state.allTransactionResults.length -1].signature : null) }
-          createdAt={state.createdAt || (state.allTransactionResults.length > 0 ? state.allTransactionResults[state.allTransactionResults.length -1].createdAt : null)}
-        />
-      )}
-      
-      <EventLog events={state.eventLog} />
-      
       {state.allProcessesComplete && state.allTransactionResults.length > 0 && (
         <div className="reports-section" style={{ marginTop: '20px', borderTop: '1px solid #ccc', paddingTop: '20px' }}>
           <h2 style={{textAlign: 'center'}}>Transaction Reports ({state.allTransactionResults.length} Processed)</h2>
@@ -483,6 +474,16 @@ function App() {
           />
         </div>
       )}
+
+      {/* {(state.isLoading || state.allProcessesComplete && state.allTransactionResults.length > 0) && (
+        <TransactionInfo 
+          signature={state.transactionSignature || (state.allTransactionResults.length > 0 ? state.allTransactionResults[state.allTransactionResults.length -1].signature : null) }
+          createdAt={state.createdAt || (state.allTransactionResults.length > 0 ? state.allTransactionResults[state.allTransactionResults.length -1].createdAt : null)}
+        />
+      )} */}
+      
+      <EventLog events={state.eventLog} />
+      
     </div>
   );
 }
