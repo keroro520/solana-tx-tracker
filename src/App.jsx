@@ -20,9 +20,8 @@ async function loadAppConfiguration() {
   try {
     // Attempt to load the user's actual config file
     configModule = await import('../config/appConfig.js');
-    console.log("Loaded appConfig.js successfully.");
   } catch (e) {
-      console.error("Failed to load appConfig.js as well:", e);
+      console.error("Failed to load appConfig.js: ", e);
       throw new Error("Configuration file appConfig.js is missing or invalid.");
   }
   if (!configModule || !configModule.appConfig) {
@@ -40,7 +39,7 @@ function App() {
       try {
         const configData = await loadAppConfiguration();
         dispatch({ type: 'LOAD_CONFIG_SUCCESS', payload: configData });
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.INFO: Config loaded: ${configData.loadedPath}` } });
+        // dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.INFO: Config loaded: ${configData.loadedPath}` } });
       } catch (error) {
         dispatch({ type: 'LOAD_CONFIG_ERROR', payload: { message: error.message, path: 'N/A' } });
         dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.ERROR: Config load error: ${error.message}` } });
@@ -134,17 +133,101 @@ function App() {
       
       dispatch({ type: 'SET_TX_INFO', payload: { signature: transactionSignatureB58, createdAt: txCreatedAt } });
       dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Transaction created: ${transactionSignatureB58}.` } });
-      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Transaction created. Sending & Subscribing...' });
+      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Transaction created. Initiating WebSocket subscriptions...' });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Initiating WebSocket subscriptions before sending RPCs.' } });
 
-      const overallSentAt = Date.now(); // Timestamp for all parallel operations start
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Sending transaction to RPC endpoints and preparing WebSocket subscriptions.' } });
+      // --- Stage 1: Setup WebSocket Subscriptions --- 
+      let confirmedCount = 0;
+      const totalEndpoints = state.config.endpoints.length;
+
+      // Keep track of connections for subscriptions
+      const subscriptionPromises = state.config.endpoints.map(ep => {
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating WebSocket connection for ${ep.name} to ${ep.wsUrl}.` } });
+        const epConnection = new Connection(ep.rpcUrl, { wsEndpoint: ep.wsUrl, commitment: 'confirmed' });
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending WebSocket subscription request for signature ${transactionSignatureB58} to ${ep.name}.` } });
+        return subscribeToSignatureConfirmation(
+          epConnection,
+          transactionSignatureB58,
+          ep.name,
+          null, // overallSentAt will be set later, pass null or handle differently in subscribeToSignatureConfirmation if needed for initial logs
+          (confirmationResult) => {
+            dispatch({ type: 'UPDATE_ENDPOINT_RESULT', payload: confirmationResult });
+            let logMessage = `WebSocket message received from ${confirmationResult.name}: `;
+            if (confirmationResult.error) {
+              logMessage += `Error: ${confirmationResult.error.message}. Raw error: ${JSON.stringify(confirmationResult.rawError || confirmationResult.error)}`;
+            } else {
+              // We need to ensure wsDuration is calculated correctly later or passed if overallSentAt is available
+              logMessage += `Confirmed. Slot: ${confirmationResult.confirmationContextSlot}. Raw data: ${JSON.stringify(confirmationResult.rawNotification || 'N/A')}`;
+              if (confirmationResult.wsDurationMs) { // Assuming wsDurationMs is added to confirmationResult
+                logMessage += ` Duration from send: ${confirmationResult.wsDurationMs} ms.`;
+              }
+            }
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: logMessage } });
+            if (!confirmationResult.error) {
+              confirmedCount++;
+            }
+            if (confirmedCount === totalEndpoints || 
+                state.results.filter(r => r.status && !r.status.includes("Pending")).length === totalEndpoints) {
+              dispatch({ type: 'PROCESS_COMPLETE' });
+            }
+          }
+        )
+        .then(subId => {
+            activeSubscriptions.current.push({ connection: epConnection, subId });
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `WebSocket subscription successful for ${ep.name}, Sub ID: ${subId}.` } });
+            return { endpointName: ep.name, subId, epConnection }; // Return connection for potential use
+        })
+        .catch(subError => {
+            console.error(`Failed to initiate subscription for ${ep.name}:`, subError);
+            dispatch({ 
+                type: 'UPDATE_ENDPOINT_RESULT', 
+                payload: { 
+                    name: ep.name, 
+                    status: `WS Sub Error: ${subError.message}`,
+                    error: { message: subError.message }
+                }
+            });
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Failed to subscribe to WebSocket for ${ep.name}: ${subError.message}` } });
+            return { endpointName: ep.name, error: subError };
+        });
+      });
+
+      // Wait for all subscription setups to attempt (though they run in background)
+      const subscriptionSetupResults = await Promise.allSettled(subscriptionPromises);
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'WebSocket subscription setup process completed for all endpoints.' } });
+      subscriptionSetupResults.forEach(res => {
+        if(res.status === 'fulfilled' && res.value && res.value.error) {
+            // Log if a specific subscription setup failed but was caught
+            console.warn(`Subscription setup for ${res.value.endpointName} had an error: ${res.value.error.message}`);
+        }
+      });
+
+      // --- Stage 2: Send Transactions via RPC --- 
+      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'WebSocket subscriptions initiated. Sending transaction to RPCs...' });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'All WebSocket subscriptions initiated. Now sending transaction to RPC endpoints.' } });
+
+      const overallSentAt = Date.now(); // Timestamp for all parallel RPC operations start
+
+      // Update overallSentAt for existing subscriptions if subscribeToSignatureConfirmation needs it for duration
+      // This is a bit tricky as subscriptions are already active. 
+      // A better approach might be to pass overallSentAt to the callback if it can be updated there,
+      // or modify subscribeToSignatureConfirmation to accept it later.
+      // For now, let's assume the callback in subscribeToSignatureConfirmation will get overallSentAt
+      // or that the duration calculation is robust enough.
+      // One simple way: Update results with overallSentAt so callback can use it
+      state.results.forEach(result => {
+        const subResult = subscriptionSetupResults.find(s => s.status === 'fulfilled' && s.value.endpointName === result.name);
+        if(subResult && subResult.value.subId) { // if subscription was successful
+            dispatch({ type: 'UPDATE_ENDPOINT_RESULT', payload: { name: result.name, overallSentAtForDurCalc: overallSentAt } });
+        }
+      });
 
       const rpcPromises = state.config.endpoints.map(ep => {
+        const epConnection = new Connection(ep.rpcUrl, 'confirmed'); // New connection for RPC send, or reuse from sub if appropriate and safe
         dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating RPC connection for ${ep.name} to ${ep.rpcUrl}.` } });
-        const epConnection = new Connection(ep.rpcUrl, 'confirmed');
         dispatch({ 
             type: 'UPDATE_ENDPOINT_RESULT', 
-            payload: { name: ep.name, status: 'Sending RPC... ' }
+            payload: { name: ep.name, status: 'Sending RPC... ' } // Update status before sending
         });
         dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending RPC to ${ep.name}...` } });
         return sendTransactionToRpc(epConnection, serializedTransaction, ep.name);
@@ -162,7 +245,7 @@ function App() {
             type: 'UPDATE_ENDPOINT_RESULT', 
             payload: { 
               name: endpointName, 
-              sentAt,
+              sentAt, // RPC sentAt
               sendDuration, 
               status: rpcSignatureOrError instanceof Error ? `RPC Error: ${rpcSignatureOrError.message}` : 'RPC Sent, Awaiting WS...',
               error: rpcSignatureOrError instanceof Error ? { message: rpcSignatureOrError.message } : null,
@@ -170,65 +253,13 @@ function App() {
             }
           });
         } else {
-          // Should not happen often if sendTransactionToRpc catches its own errors
           console.error("Unhandled error in RPC send promise:", result.reason);
           dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Unhandled error in RPC send for an endpoint: ${result.reason}` } });
-          // Dispatch an update for this endpoint if its name can be derived or use a general error
         }
       });
 
       dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'RPC sends complete. Awaiting WebSocket confirmations...' });
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'All RPC sends complete. Initiating WebSocket subscriptions.' } });
-
-      let confirmedCount = 0;
-      const totalEndpoints = state.config.endpoints.length;
-
-      state.config.endpoints.forEach(ep => {
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating WebSocket connection for ${ep.name} to ${ep.wsUrl}.` } });
-        const epConnection = new Connection(ep.rpcUrl, { wsEndpoint: ep.wsUrl, commitment: 'confirmed' });
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending WebSocket subscription request for signature ${transactionSignatureB58} to ${ep.name} (WS: ${ep.wsUrl}).` } });
-        subscribeToSignatureConfirmation(
-          epConnection,
-          transactionSignatureB58,
-          ep.name,
-          overallSentAt,
-          (confirmationResult) => {
-            dispatch({ type: 'UPDATE_ENDPOINT_RESULT', payload: confirmationResult });
-            let logMessage = `WebSocket message received from ${confirmationResult.name}: `;
-            if (confirmationResult.error) {
-              logMessage += `Error: ${confirmationResult.error.message}. Raw error: ${JSON.stringify(confirmationResult.rawError || confirmationResult.error)}`;
-            } else {
-              logMessage += `Confirmed. Slot: ${confirmationResult.confirmationContextSlot}. Duration from send: ${confirmationResult.wsDuration} ms. Raw data: ${JSON.stringify(confirmationResult.rawNotification || 'N/A')}`;
-            }
-            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: logMessage } });
-            if (!confirmationResult.error) {
-              confirmedCount++;
-            }
-            if (confirmedCount === totalEndpoints || 
-                state.results.filter(r => r.status && !r.status.includes("Pending")).length === totalEndpoints) { // Check if all have reported something
-              dispatch({ type: 'PROCESS_COMPLETE' });
-            }
-          }
-        )
-        .then(subId => {
-            activeSubscriptions.current.push({ connection: epConnection, subId });
-        })
-        .catch(subError => {
-            console.error(`Failed to initiate subscription for ${ep.name}:`, subError);
-            dispatch({ 
-                type: 'UPDATE_ENDPOINT_RESULT', 
-                payload: { 
-                    name: ep.name, 
-                    status: `WS Sub Error: ${subError.message}`,
-                    error: { message: subError.message }
-                }
-            });
-            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Failed to subscribe to WebSocket for ${ep.name}: ${subError.message}` } });
-        });
-      });
-
-      // Note: PROCESS_COMPLETE is now dispatched within the WS callback logic
-      // or after a timeout (to be implemented in Phase 6)
+      // PROCESS_COMPLETE is dispatched within the WS callback logic
 
     } catch (error) {
       console.error("Error during transaction processing:", error);
@@ -244,12 +275,6 @@ function App() {
       </header>
       
       <GlobalAlert error={state.globalError} onDismiss={() => dispatch({ type: 'CLEAR_GLOBAL_ERROR' })} />
-      
-      {/* Pass the loadedPath to ConfigDisplay if available in state.config */}
-      <ConfigDisplay 
-        configStatus={state.configStatus} 
-        configPath={state.config?.loadedPath || state.configPath} 
-      />
 
       <div className="controls-area" style={{ marginBottom: '20px' }}>
         <button onClick={handleSendTransaction} disabled={state.isLoading || !state.config}>
