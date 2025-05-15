@@ -139,7 +139,7 @@ function App() {
   }, [state.isLoading]);
 
   const handleSendTransaction = async () => {
-    // Updated config validation
+    // Initial Validations and Setup (dispatch PROCESS_START, clear old subs, parse key)
     if (!state.config || 
         !state.config.privateKey || 
         !state.config.rpcUrls || state.config.rpcUrls.length === 0 ||
@@ -154,21 +154,21 @@ function App() {
     dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Processing started.' } });
     console.log("Send Transaction Clicked. Config Loaded From:", state.config.loadedPath);
 
+    // Clear previous subscriptions (important if user clicks again before full cleanup)
     activeSubscriptions.current.forEach(({ connection, subId }) => {
         if (connection && typeof connection.removeSignatureListener === 'function') {
-            console.log("Clearing old subscription ID:", subId);
+            console.log("(Re-run) Clearing old subscription ID:", subId);
             connection.removeSignatureListener(subId);
         }
     });
     activeSubscriptions.current = [];
 
     let sourceKeypair;
-    let initialRpcConnection; // For creating the transaction
+    let initialRpcConnection;
     let transactionSignatureB58;
     let txCreatedAt;
     let serializedTransaction;
 
-    // Determine the RPC URL for transaction creation (e.g., the first one)
     const creationRpcUrl = state.config.rpcUrls[0].url;
 
     try {
@@ -187,38 +187,36 @@ function App() {
       
       dispatch({ type: 'SET_TX_INFO', payload: { signature: transactionSignatureB58, createdAt: txCreatedAt } });
       dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Transaction created: ${transactionSignatureB58}.` } });
-      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Transaction created. Initiating WebSocket subscriptions...' });
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Initiating WebSocket subscriptions.' } });
+      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Transaction created. Initiating communications...' });
 
-      // --- Stage 1: Setup WebSocket Subscriptions --- 
-      const totalWsEndpoints = state.config.wsUrls.length;
-      const wsSubscriptionOverallSentAt = Date.now();
+      const overallStartTime = Date.now();
+      dispatch({ type: 'SET_TRANSACTION_SENT_AT', payload: overallStartTime }); // General start for activities
 
-      const wsSubscriptionPromises = state.config.wsUrls.map(wsConfig => {
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating WebSocket connection for ${wsConfig.name} to ${wsConfig.url}. RPC proxy: ${creationRpcUrl}` } });
-        // Connection needs an RPC URL, but wsEndpoint overrides for actual WS connection. Use first RPC URL as a base.
-        const wsConnection = new Connection(creationRpcUrl, { wsEndpoint: wsConfig.url, commitment: 'confirmed' });
-        
-        // Initialize result placeholder for this WS endpoint
+      // --- Initiate ALL WebSocket Subscriptions Concurrently ---
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Initiating all WebSocket subscriptions concurrently.' } });
+      const wsPromises = state.config.wsUrls.map(wsConfig => {
         dispatch({
           type: 'UPDATE_WS_CONFIRMATION_RESULT',
           payload: {
             name: wsConfig.name,
             url: wsConfig.url,
             status: 'Subscribing...',
-            overallSentAtForDurCalc: wsSubscriptionOverallSentAt, // For duration calc from this point
+            overallSentAtForDurCalc: overallStartTime,
           }
         });
+        const wsConnection = new Connection(creationRpcUrl, { wsEndpoint: wsConfig.url, commitment: 'confirmed' });
         dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending WebSocket subscription request for signature ${transactionSignatureB58} to ${wsConfig.name}.` } });
         
         return subscribeToSignatureConfirmation(
           wsConnection,
           transactionSignatureB58,
           wsConfig.name,
-          wsSubscriptionOverallSentAt,
+          overallStartTime, 
           (confirmationResult) => {
-            // If process is already complete by another WS, do nothing further
-            if (firstWsConfirmedRef.current && state.isComplete) return;
+            if (firstWsConfirmedRef.current && state.isComplete) {
+                console.log(`WS Conf from ${confirmationResult.name} received, but process already marked complete. Ignoring.`);
+                return;
+            }
 
             dispatch({ type: 'UPDATE_WS_CONFIRMATION_RESULT', payload: confirmationResult });
             
@@ -235,7 +233,6 @@ function App() {
             dispatch({ type: 'LOG_EVENT', payload: { timestamp: currentEventTimestamp, message: logMessage } });
 
             if (!confirmationResult.error) {
-              // FIRST successful confirmation completes the process
               if (!firstWsConfirmedRef.current) {
                 console.log(`First WS confirmation from ${confirmationResult.name}. Completing process.`);
                 firstWsConfirmedRef.current = true;
@@ -243,141 +240,117 @@ function App() {
                 dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Process Complete (First WS Confirmation via ${confirmationResult.name})` });
                 dispatch({ type: 'PROCESS_COMPLETE' });
 
-                // Clean up ALL active subscriptions
                 console.log("Cleaning up all active WebSocket subscriptions after first confirmation.");
-                activeSubscriptions.current.forEach(({ connection: subConn, subId }) => {
+                activeSubscriptions.current.forEach(({ connection: subConn, subId, name: subName }) => {
                   if (subConn && typeof subConn.removeSignatureListener === 'function') {
-                    console.log(`Removing listener for Sub ID: ${subId}`);
+                    console.log(`Removing listener for ${subName}, Sub ID: ${subId}`);
                     subConn.removeSignatureListener(subId);
                   }
                 });
                 activeSubscriptions.current = []; 
-                return; // Exit callback once process is complete
+                return;
               }
             } 
-            // If this specific WS errored, but others might still succeed or it was already completed
-            // No explicit PROCESS_COMPLETE dispatch here for errors unless it's the very last one (handled after Promise.allSettled)
           }
         )
-        .then(subIdObj => { // subIdObj is { wsName, subId, wsConnection } or { wsName, error }
+        .then(subIdObj => {
           if (subIdObj && !subIdObj.error && subIdObj.subId !== undefined) {
-            // Only add to activeSubscriptions if successfully subscribed
             activeSubscriptions.current.push({ connection: subIdObj.wsConnection, subId: subIdObj.subId, name: subIdObj.wsName });
             dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `WebSocket subscription request processed for ${subIdObj.wsName}, Sub ID: ${subIdObj.subId}.` } });
-            dispatch({
-              type: 'UPDATE_WS_CONFIRMATION_RESULT',
-              payload: { name: subIdObj.wsName, status: 'Subscribed, Awaiting Confirmation' }
-            });
+            // Update status only if not already completed by another faster WS
+            if (!firstWsConfirmedRef.current) {
+                dispatch({
+                  type: 'UPDATE_WS_CONFIRMATION_RESULT',
+                  payload: { name: subIdObj.wsName, status: 'Subscribed, Awaiting Confirmation' }
+                });
+            }
             return subIdObj;
-          } else if (subIdObj && subIdObj.error) {
-            // Error already handled in .catch of subscribeToSignatureConfirmation wrapper, just return it
-            return subIdObj;
-          }
-          return subIdObj; // Should include wsName
+          } 
+          return subIdObj; 
         })
         .catch(subError => {
-            // This catch is for errors in subscribeToSignatureConfirmation promise itself or the .then block
             console.error(`Critical error setting up subscription promise for ${wsConfig.name}:`, subError);
-            // Ensure a result is still dispatched so the overall completion logic can work
-            dispatch({ 
-                type: 'UPDATE_WS_CONFIRMATION_RESULT', 
-                payload: { 
-                    name: wsConfig.name, 
-                    url: wsConfig.url,
-                    status: `WS Sub Setup Error: ${subError.message}`,
-                    error: { message: subError.message },
-                    overallSentAtForDurCalc: wsSubscriptionOverallSentAt
-                }
-            });
+            if (!firstWsConfirmedRef.current || !state.isComplete) { // Avoid updating if already completed
+                dispatch({ 
+                    type: 'UPDATE_WS_CONFIRMATION_RESULT', 
+                    payload: { 
+                        name: wsConfig.name, 
+                        url: wsConfig.url,
+                        status: `WS Sub Setup Error: ${subError.message}`,
+                        error: { message: subError.message },
+                        overallSentAtForDurCalc: overallStartTime
+                    }
+                });
+            }
             dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Critical error subscribing to WebSocket for ${wsConfig.name}: ${subError.message}` } });
-            return { wsName: wsConfig.name, error: subError }; // Ensure wsName is part of the error object
+            return { wsName: wsConfig.name, error: subError };
         });
       });
 
-      // Wait for all WS subscription *setups* to complete (or fail)
-      const wsSubscriptionSetupResults = await Promise.allSettled(wsSubscriptionPromises);
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'All WebSocket subscription setup attempts have settled.' } });
-      wsSubscriptionSetupResults.forEach(res => {
-        if(res.status === 'fulfilled' && res.value && res.value.error && res.value.wsName) {
-            console.warn(`Subscription setup for ${res.value.wsName} resulted in an error: ${res.value.error.message}`);
-        } else if (res.status === 'rejected'){
-            console.error("A WS subscription setup promise was rejected:", res.reason);
-            // Potentially find which one if possible, or log generic error
-        }
-      });
-      
-      // If, after all WS setup attempts, no single WS has confirmed and completed the process:
-      if (!firstWsConfirmedRef.current && state.isLoading) { // state.isLoading check prevents re-dispatch if already completed
-        // This means all WS subscriptions have either errored during setup, or their callbacks haven't reported a success yet.
-        // We declare the process complete here to unblock UI, results will show individual errors.
-        console.log("No WebSocket confirmed successfully after all setup attempts. Completing process with available results.");
-        dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Process Complete (No immediate WS confirmation; check individual statuses).' });
-        dispatch({ type: 'PROCESS_COMPLETE' });
-        // Clean up any subscriptions that might still be lingering if they didn't error out but also didn't confirm fast enough.
-        activeSubscriptions.current.forEach(({ connection: subConn, subId }) => {
-          if (subConn && typeof subConn.removeSignatureListener === 'function') {
-             subConn.removeSignatureListener(subId);
+      // --- Initiate ALL RPC Sends Concurrently (Fire-and-Forget style for each) ---
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Initiating all RPC sends concurrently.' } });
+      state.config.rpcUrls.forEach(rpcConfig => {
+        dispatch({
+          type: 'UPDATE_RPC_SEND_RESULT',
+          payload: {
+            name: rpcConfig.name,
+            url: rpcConfig.url,
+            status: 'Sending...',
+            sentAt: overallStartTime 
           }
         });
-        activeSubscriptions.current = [];
-      }
+        const rpcConnection = new Connection(rpcConfig.url, 'confirmed');
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending RPC to ${rpcConfig.name}...` } });
+        
+        sendTransactionToRpc(rpcConnection, serializedTransaction, rpcConfig.name)
+          .then(rpcResult => {
+            // sendTransactionToRpc should dispatch its own UPDATE_RPC_SEND_RESULT upon completion.
+            // This .then is for any additional logging or actions if necessary.
+            const message = rpcResult.rpcSignatureOrError instanceof Error ? `Async RPC Send for ${rpcResult.endpointName} completed with error: ${rpcResult.rpcSignatureOrError.message}` : `Async RPC Send to ${rpcResult.endpointName} completed. Signature: ${rpcResult.rpcSignatureOrError}.`;
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message } });
+          })
+          .catch(error => {
+            console.error(`Unhandled error from sendTransactionToRpc promise for ${rpcConfig.name}:`, error);
+            dispatch({ 
+              type: 'UPDATE_RPC_SEND_RESULT', 
+              payload: { 
+                name: rpcConfig.name, 
+                url: rpcConfig.url, 
+                status: `RPC Critical Error: ${error.message}`,
+                error: { message: error.message }, 
+                sentAt: overallStartTime 
+              }
+            });
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Critical unhandled error in RPC send for ${rpcConfig.name}: ${error.message}` } });
+          });
+      });
 
-      // --- Stage 2: Send Transactions via RPC (Fire-and-Forget) --- 
-      // Only proceed if the process hasn't been marked complete by a WS confirmation already
-      if (!state.isComplete && !firstWsConfirmedRef.current) { 
-        dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Sending transaction to RPCs (concurrently with WS)...' });
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Sending transaction to all RPC URLs (fire-and-forget).' } });
+      dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'All RPC sends and WebSocket subscriptions initiated. Awaiting first WS confirmation...' });
 
-        const rpcOverallSentAt = Date.now(); 
-        dispatch({ type: 'SET_TRANSACTION_SENT_AT', payload: rpcOverallSentAt });
-
-        state.config.rpcUrls.forEach(rpcConfig => {
-          dispatch({
-            type: 'UPDATE_RPC_SEND_RESULT',
-            payload: {
-              name: rpcConfig.name,
-              url: rpcConfig.url,
-              status: 'Sending...',
-              sentAt: rpcOverallSentAt 
+      // --- Fallback Completion Logic: After all WS Setups Attempted ---
+      Promise.allSettled(wsPromises).then(() => {
+        // Check if state.isLoading is true to prevent this from running if already completed by a fast WS confirm.
+        // Also check firstWsConfirmedRef again, as it might have just been set by a WS callback.
+        if (state.isLoading && !firstWsConfirmedRef.current) { 
+          console.log("All WS subscription attempts settled. No single WS confirmed first during setup phase. Completing process.");
+          dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Process Complete (No immediate WS confirmation; check individual statuses).' });
+          dispatch({ type: 'PROCESS_COMPLETE' });
+          
+          console.log("Cleaning up any remaining WebSocket subscriptions (fallback).");
+          activeSubscriptions.current.forEach(({ connection: subConn, subId, name: subName }) => {
+            if (subConn && typeof subConn.removeSignatureListener === 'function') {
+              console.log(`(Fallback Cleanup) Removing listener for ${subName}, Sub ID: ${subId}`);
+              subConn.removeSignatureListener(subId);
             }
           });
-          const rpcConnection = new Connection(rpcConfig.url, 'confirmed');
-          dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending RPC to ${rpcConfig.name}...` } });
-          
-          // Fire-and-forget: Don't await the promise here
-          sendTransactionToRpc(rpcConnection, serializedTransaction, rpcConfig.name)
-            .then(rpcResult => {
-              // sendTransactionToRpc is expected to dispatch UPDATE_RPC_SEND_RESULT internally.
-              // This .then is just for any additional logging if needed, or can be removed if sendTransactionToRpc handles all its state updates.
-              const message = rpcResult.rpcSignatureOrError instanceof Error ? `Async RPC Send Error for ${rpcResult.endpointName}: ${rpcResult.rpcSignatureOrError.message}` : `Async Transaction sent via RPC to ${rpcResult.endpointName}. RPC Signature: ${rpcResult.rpcSignatureOrError}.`;
-              dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message } });
-            })
-            .catch(error => {
-              // This catch is for unexpected errors from sendTransactionToRpc promise itself.
-              // sendTransactionToRpc should ideally always resolve with a result object including errors.
-              console.error(`Unhandled error from sendTransactionToRpc promise for ${rpcConfig.name}:`, error);
-              dispatch({ 
-                type: 'UPDATE_RPC_SEND_RESULT', 
-                payload: { 
-                  name: rpcConfig.name, 
-                  url: rpcConfig.url, 
-                  status: `RPC Critical Error: ${error.message}`,
-                  error: { message: error.message }, 
-                  sentAt: rpcOverallSentAt 
-                }
-              });
-              dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Critical unhandled error in RPC send for ${rpcConfig.name}: ${error.message}` } });
-            });
-        });
-        // No longer awaiting RPC results or setting status based on them here for PROCESS_COMPLETE
-      } else if (firstWsConfirmedRef.current) {
-        // If WS already confirmed, log that RPC sends are being skipped or managed in background.
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Process completed by WS confirmation. RPC sends are fire-and-forget or were already initiated.' } });
-      }
+          activeSubscriptions.current = [];
+        }
+      });
 
     } catch (error) {
       console.error("Error during transaction processing setup:", error);
-      if (!state.isComplete) { // Avoid double PROCESS_ERROR if WS completed it
+      // Avoid double PROCESS_ERROR if already completed by a WS or fallback.
+      if (state.isLoading && !state.isComplete) { 
         dispatch({ type: 'PROCESS_ERROR', payload: { message: error.message } });
       }
       dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Critical error during transaction processing: ${error.message}` } });
