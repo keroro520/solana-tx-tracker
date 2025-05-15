@@ -6,6 +6,7 @@ import GlobalAlert from './components/GlobalAlert.jsx';
 import ResultsTable from './components/ResultsTable.jsx';
 import TransactionInfo from './components/TransactionInfo.jsx';
 import ConfigDisplay from './components/ConfigDisplay.jsx';
+import EventLog from './components/EventLog.jsx';
 import { 
   parsePrivateKey, 
   createSimpleTransferTransaction, 
@@ -61,9 +62,11 @@ function App() {
   const handleSendTransaction = async () => {
     if (!state.config || !state.config.privateKey || !state.config.endpoints || state.config.endpoints.length === 0) {
       dispatch({ type: 'SET_GLOBAL_ERROR', payload: { message: 'Configuration is missing, invalid, or has no endpoints. Please check src/config/appConfig.js.', type: 'config' } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Error: Configuration missing or invalid.' } });
       return;
     }
     dispatch({ type: 'PROCESS_START' });
+    dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Processing started.' } });
     console.log("Send Transaction Clicked. Config Loaded From:", state.config.loadedPath);
 
     // Clear previous subscriptions
@@ -82,34 +85,44 @@ function App() {
     let serializedTransaction;
 
     try {
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Parsing private key.' } });
       const secretKeyUint8Array = parsePrivateKey(state.config.privateKey);
       sourceKeypair = Keypair.fromSecretKey(secretKeyUint8Array);
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating initial RPC connection to ${state.config.endpoints[0].rpcUrl}.` } });
       initialConnection = new Connection(state.config.endpoints[0].rpcUrl, 'confirmed');
-
+      
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Preparing to create and sign transaction.' } });
       const { transaction, signature, createdAt } = await createSimpleTransferTransaction(initialConnection, sourceKeypair);
       transactionSignatureB58 = signature;
       txCreatedAt = createdAt;
       serializedTransaction = transaction.serialize();
       
       dispatch({ type: 'SET_TX_INFO', payload: { signature: transactionSignatureB58, createdAt: txCreatedAt } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Transaction created: ${transactionSignatureB58}.` } });
       dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'Transaction created. Sending & Subscribing...' });
 
       const overallSentAt = Date.now(); // Timestamp for all parallel operations start
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Sending transaction to RPC endpoints and preparing WebSocket subscriptions.' } });
 
       const rpcPromises = state.config.endpoints.map(ep => {
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating RPC connection for ${ep.name} to ${ep.rpcUrl}.` } });
         const epConnection = new Connection(ep.rpcUrl, 'confirmed');
         dispatch({ 
             type: 'UPDATE_ENDPOINT_RESULT', 
             payload: { name: ep.name, status: 'Sending RPC... ' }
         });
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending RPC to ${ep.name}...` } });
         return sendTransactionToRpc(epConnection, serializedTransaction, ep.name);
       });
 
       const rpcResults = await Promise.allSettled(rpcPromises);
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'RPC send process completed for all endpoints.' } });
       
       rpcResults.forEach(result => {
         if (result.status === 'fulfilled') {
           const { endpointName, sentAt, sendDuration, rpcSignatureOrError } = result.value;
+          const message = rpcSignatureOrError instanceof Error ? `RPC Send Error for ${endpointName}: ${rpcSignatureOrError.message}` : `Transaction sent via RPC to ${endpointName}. RPC Signature: ${rpcSignatureOrError}. Awaiting WebSocket confirmation.`;
+          dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message } });
           dispatch({ 
             type: 'UPDATE_ENDPOINT_RESULT', 
             payload: { 
@@ -124,17 +137,21 @@ function App() {
         } else {
           // Should not happen often if sendTransactionToRpc catches its own errors
           console.error("Unhandled error in RPC send promise:", result.reason);
+          dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Unhandled error in RPC send for an endpoint: ${result.reason}` } });
           // Dispatch an update for this endpoint if its name can be derived or use a general error
         }
       });
 
       dispatch({ type: 'SET_GLOBAL_STATUS', payload: 'RPC sends complete. Awaiting WebSocket confirmations...' });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'All RPC sends complete. Initiating WebSocket subscriptions.' } });
 
       let confirmedCount = 0;
       const totalEndpoints = state.config.endpoints.length;
 
       state.config.endpoints.forEach(ep => {
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating WebSocket connection for ${ep.name} to ${ep.wsUrl}.` } });
         const epConnection = new Connection(ep.rpcUrl, { wsEndpoint: ep.wsUrl, commitment: 'confirmed' });
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending WebSocket subscription request for signature ${transactionSignatureB58} to ${ep.name} (WS: ${ep.wsUrl}).` } });
         subscribeToSignatureConfirmation(
           epConnection,
           transactionSignatureB58,
@@ -142,6 +159,13 @@ function App() {
           overallSentAt,
           (confirmationResult) => {
             dispatch({ type: 'UPDATE_ENDPOINT_RESULT', payload: confirmationResult });
+            let logMessage = `WebSocket message received from ${confirmationResult.name}: `;
+            if (confirmationResult.error) {
+              logMessage += `Error: ${confirmationResult.error.message}. Raw error: ${JSON.stringify(confirmationResult.rawError || confirmationResult.error)}`;
+            } else {
+              logMessage += `Confirmed. Slot: ${confirmationResult.confirmationContextSlot}. Duration from send: ${confirmationResult.wsDuration} ms. Raw data: ${JSON.stringify(confirmationResult.rawNotification || 'N/A')}`;
+            }
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: logMessage } });
             if (!confirmationResult.error) {
               confirmedCount++;
             }
@@ -164,6 +188,7 @@ function App() {
                     error: { message: subError.message }
                 }
             });
+            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Failed to subscribe to WebSocket for ${ep.name}: ${subError.message}` } });
         });
       });
 
@@ -173,6 +198,7 @@ function App() {
     } catch (error) {
       console.error("Error during transaction processing:", error);
       dispatch({ type: 'PROCESS_ERROR', payload: { message: error.message } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Critical error during transaction processing: ${error.message}` } });
     }
   };
 
@@ -203,6 +229,8 @@ function App() {
       <TransactionInfo signature={state.transactionSignature} createdAt={state.createdAt} />
       
       <ResultsTable results={state.results} />
+
+      <EventLog events={state.eventLog} />
       
     </div>
   );

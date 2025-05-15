@@ -12,6 +12,7 @@ const initialState = {
   createdAt: null,
   results: [], // Array of { name, sendDuration, confirmationDuration, status, error? }
   globalError: null, // { message: string, type: 'config' | 'critical' }
+  eventLog: [], // To store timestamped event messages
 };
 
 function appReducer(state, action) {
@@ -62,6 +63,11 @@ function appReducer(state, action) {
       return { ...state, globalError: { message: action.payload.message, type: action.payload.type || 'critical' } };
     case 'CLEAR_GLOBAL_ERROR':
       return { ...state, globalError: null };
+    case 'LOG_EVENT':
+      return {
+        ...state,
+        eventLog: [...state.eventLog, { timestamp: action.payload.timestamp, message: action.payload.message }],
+      };
     default:
       return state;
   }

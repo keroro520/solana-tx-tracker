@@ -1,0 +1,43 @@
+.event-log-container {
+  margin-top: 20px;
+  padding: 15px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  background-color: #f9f9f9;
+}
+
+.event-log-container h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.event-list {
+  list-style-type: none;
+  padding-left: 0;
+  max-height: 300px; /* Example max height, adjust as needed */
+  overflow-y: auto;   /* Add scroll for overflow */
+}
+
+.event-item {
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  font-size: 0.9em;
+}
+
+.event-item:last-child {
+  border-bottom: none;
+}
+
+.event-timestamp {
+  min-width: 180px; /* Adjust as needed */
+  margin-right: 15px;
+  color: #555;
+  font-family: monospace;
+}
+
+.event-message {
+  color: #333;
+  word-break: break-word; /* Ensure long messages wrap */
+} 
