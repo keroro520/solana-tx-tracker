@@ -1,6 +1,6 @@
 import React from 'react';
 
-const EventSummaryTable = ({ events, endpointsConfig }) => {
+const EventSummaryTable = ({ events, rpcUrlsConfig, wsUrlsConfig }) => {
   if (!events || events.length === 0) {
     return <p>No event data to display for summary.</p>;
   }
@@ -11,51 +11,60 @@ const EventSummaryTable = ({ events, endpointsConfig }) => {
     let url = '-';
     let endpointName;
 
+    // Helper to find URL from config arrays
+    const findUrlInConfigs = (name, type) => {
+      const nameLower = name.toLowerCase();
+      if (type === 'ws' && wsUrlsConfig) {
+        const endpoint = wsUrlsConfig.find(ep => ep.name.toLowerCase() === nameLower);
+        if (endpoint) return endpoint.url;
+      }
+      if (type === 'rpc' && rpcUrlsConfig) {
+        const endpoint = rpcUrlsConfig.find(ep => ep.name.toLowerCase() === nameLower);
+        if (endpoint) return endpoint.url;
+      }
+      return '-'; // Default if not found
+    };
+
     if (message.includes('transaction created:')) {
       eventType = 'CreateTransaction';
       // No URL for this event
     } else if (message.includes('creating websocket connection for')) {
       eventType = 'WebsocketSubscribe';
-      const urlMatch = message.match(/to (wss?:\/\/[^\s]+)/i);
+      const urlMatch = message.match(/to (wss?:\/\/[^\s]+)/i); // Direct URL match
       if (urlMatch) {
         url = urlMatch[1];
       } else {
-        const nameMatch = message.match(/for (.*?) to /i);
-        if (nameMatch && endpointsConfig) {
+        const nameMatch = message.match(/for (.*?) to /i); // Match by name
+        if (nameMatch) {
           endpointName = nameMatch[1].trim();
-          const endpoint = endpointsConfig.find(ep => ep.name.toLowerCase() === endpointName.toLowerCase());
-          if (endpoint) url = endpoint.wsUrl;
+          url = findUrlInConfigs(endpointName, 'ws');
         }
       }
     } else if (message.includes('websocket message received from') && message.includes('confirmed')) {
       eventType = 'WebsocketReceiveConfirmation';
       const nameMatch = message.match(/from (.*?):/i);
-      if (nameMatch && endpointsConfig) {
+      if (nameMatch) {
         endpointName = nameMatch[1].trim();
-        const endpoint = endpointsConfig.find(ep => ep.name.toLowerCase() === endpointName.toLowerCase());
-        if (endpoint) url = endpoint.wsUrl; // Assuming confirmation relates to the endpoint's WS URL
+        url = findUrlInConfigs(endpointName, 'ws');
       }
     } else if (message.includes('creating rpc connection for')) {
       eventType = 'RpcConnect';
-      const urlMatch = message.match(/to (https?:\/\/[^\s]+)/i);
+      const urlMatch = message.match(/to (https?:\/\/[^\s]+)/i); // Direct URL match
       if (urlMatch) {
         url = urlMatch[1];
       } else {
-        const nameMatch = message.match(/for (.*?) to /i);
-        if (nameMatch && endpointsConfig) {
+        const nameMatch = message.match(/for (.*?) to /i); // Match by name
+        if (nameMatch) {
           endpointName = nameMatch[1].trim();
-          const endpoint = endpointsConfig.find(ep => ep.name.toLowerCase() === endpointName.toLowerCase());
-          if (endpoint) url = endpoint.rpcUrl;
+          url = findUrlInConfigs(endpointName, 'rpc');
         }
       }
     } else if (message.includes('transaction sent via rpc to') && !message.includes('error')) {
       eventType = 'RpcSendTransaction';
-      // Matches "transaction sent via rpc to ENDPOINT_NAME. RPC Signature..." or "transaction sent via rpc to ENDPOINT_NAME."
       const nameMatch = message.match(/via rpc to (.*?)(?:\. rpc signature|\.(?!\w)|$)/i);
-      if (nameMatch && endpointsConfig) {
+      if (nameMatch) {
         endpointName = nameMatch[1].trim();
-        const endpoint = endpointsConfig.find(ep => ep.name.toLowerCase() === endpointName.toLowerCase());
-        if (endpoint) url = endpoint.rpcUrl;
+        url = findUrlInConfigs(endpointName, 'rpc');
       }
     }
 

@@ -3,7 +3,7 @@ import React, { createContext, useReducer, useContext } from 'react';
 const AppContext = createContext();
 
 const initialState = {
-  config: null, // Will store the actual config object { privateKey, endpoints, loadedPath }
+  config: null, // Will store { privateKey, rpcUrls, wsUrls, loadedPath, ...otherConfig }
   configStatus: 'Loading configuration...', // User-facing status message
   // configPath is effectively replaced by state.config.loadedPath after successful load
   isLoading: false,
@@ -13,7 +13,8 @@ const initialState = {
   createdAt: null,
   transactionSentAt: null, // New: Timestamp when all RPCs are about to be sent
   firstWsConfirmedAt: null, // New: Timestamp of the first WS confirmation
-  results: [], // Array of { name, sendDuration, confirmationDuration, status, error? }
+  rpcSendResults: [], // New: Array of { name, url, status, sendDuration, rpcSignatureOrError, sentAt }
+  wsConfirmationResults: [], // New: Array of { name, url, status, confirmationContextSlot, wsDurationMs, error, overallSentAtForDurCalc, confirmedAt }
   globalError: null, // { message: string, type: 'config' | 'critical' }
   eventLog: [], // To store timestamped event messages
 };
@@ -23,14 +24,14 @@ function appReducer(state, action) {
     case 'LOAD_CONFIG_SUCCESS':
       return { 
         ...state, 
-        config: action.payload, // payload includes { ...actualConfig, loadedPath }
+        config: action.payload, 
         configStatus: `Successfully loaded configuration from: ${action.payload.loadedPath}`,
-        globalError: null // Clear any previous config errors
+        globalError: null
       };
     case 'LOAD_CONFIG_ERROR':
       return { 
         ...state, 
-        config: null, // Ensure config is null on error
+        config: null,
         configStatus: `Error loading configuration: ${action.payload.message}`,
         globalError: { message: `Config Error: ${action.payload.message}`, type: 'config' } 
       };
@@ -38,29 +39,47 @@ function appReducer(state, action) {
       return { 
         ...state, 
         isLoading: true, 
-        isComplete: false, // Reset on new process
+        isComplete: false,
         globalStatus: 'Initializing... Fetching blockhash... Creating transaction...', 
         transactionSignature: null, 
         createdAt: null, 
-        transactionSentAt: null, // Reset on new process
-        firstWsConfirmedAt: null, // Reset on new process
-        results: [], // Clear previous results for the new process
-        globalError: null // Clear previous process errors
+        transactionSentAt: null,
+        firstWsConfirmedAt: null,
+        rpcSendResults: [], // Clear previous RPC results
+        wsConfirmationResults: [], // Clear previous WS results
+        globalError: null
       };
     case 'SET_TX_INFO':
       return { ...state, transactionSignature: action.payload.signature, createdAt: action.payload.createdAt, globalStatus: 'Transaction created. Sending to RPCs & Subscribing to WebSockets...' };
     case 'SET_GLOBAL_STATUS':
       return { ...state, globalStatus: action.payload };
-    case 'UPDATE_ENDPOINT_RESULT':
-      // This is a simplified update; a real one might update or add
-      const existingResultIndex = state.results.findIndex(r => r.name === action.payload.name);
-      if (existingResultIndex > -1) {
-        const updatedResults = [...state.results];
-        updatedResults[existingResultIndex] = { ...updatedResults[existingResultIndex], ...action.payload };
-        return { ...state, results: updatedResults };
+    
+    case 'UPDATE_RPC_SEND_RESULT': {
+      const { name } = action.payload; // name is the unique identifier for an RPC endpoint config
+      const existingIndex = state.rpcSendResults.findIndex(r => r.name === name);
+      let newRpcSendResults;
+      if (existingIndex > -1) {
+        newRpcSendResults = [...state.rpcSendResults];
+        newRpcSendResults[existingIndex] = { ...newRpcSendResults[existingIndex], ...action.payload };
       } else {
-        return { ...state, results: [...state.results, action.payload] };
+        newRpcSendResults = [...state.rpcSendResults, action.payload];
       }
+      return { ...state, rpcSendResults: newRpcSendResults };
+    }
+
+    case 'UPDATE_WS_CONFIRMATION_RESULT': {
+      const { name } = action.payload; // name is the unique identifier for a WS endpoint config
+      const existingIndex = state.wsConfirmationResults.findIndex(r => r.name === name);
+      let newWsConfirmationResults;
+      if (existingIndex > -1) {
+        newWsConfirmationResults = [...state.wsConfirmationResults];
+        newWsConfirmationResults[existingIndex] = { ...newWsConfirmationResults[existingIndex], ...action.payload };
+      } else {
+        newWsConfirmationResults = [...state.wsConfirmationResults, action.payload];
+      }
+      return { ...state, wsConfirmationResults: newWsConfirmationResults };
+    }
+
     case 'PROCESS_COMPLETE':
       return { ...state, isLoading: false, globalStatus: 'Process Complete.', isComplete: true };
     case 'PROCESS_ERROR': // For errors during the main process after config load
