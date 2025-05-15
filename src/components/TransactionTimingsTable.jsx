@@ -1,6 +1,6 @@
 import React from 'react';
 
-const TransactionTimingsTable = ({ allTransactionsData }) => {
+const TransactionTimingsTable = ({ allTransactionsData, network }) => {
   const formatOptTimestamp = (ts) => ts ? new Date(ts).toISOString() : 'N/A';
   const calculateDuration = (start, end) => {
     if (start && end) {
@@ -13,6 +13,13 @@ const TransactionTimingsTable = ({ allTransactionsData }) => {
   const shortenSignature = (sig) => {
     if (!sig) return 'N/A';
     return `${sig.substring(0, 4)}...${sig.substring(sig.length - 4)}`;
+  };
+
+  // Generate the correct URL based on network
+  const getSolscanUrl = (signature) => {
+    return network === 'mainnet' 
+      ? `https://solscan.io/tx/${signature}`
+      : `https://solscan.io/tx/${signature}?cluster=devnet`;
   };
 
   if (!allTransactionsData || allTransactionsData.length === 0) {
@@ -46,7 +53,7 @@ const TransactionTimingsTable = ({ allTransactionsData }) => {
               <td>
                 {txData.signature && !txData.error ? (
                   <a 
-                    href={`https://solscan.io/tx/${txData.signature}?cluster=devnet`} 
+                    href={getSolscanUrl(txData.signature)} 
                     target="_blank" 
                     rel="noopener noreferrer"
                   >

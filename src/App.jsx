@@ -19,6 +19,7 @@ async function loadAppConfiguration() {
   let configModule;
   let configFileName;
   let loadedConfigPathForImport; // Path for dynamic import
+  let network = 'devnet'; // Default network is devnet
 
   // Parse URL parameters
   const queryParams = new URLSearchParams(window.location.search);
@@ -26,9 +27,11 @@ async function loadAppConfiguration() {
 
   if (networkParam === 'mainnet') {
     configFileName = 'mainnet.appConfig.js';
+    network = 'mainnet'; // Set network to mainnet
   } else {
     // Default to devnet if 'network' is not 'mainnet' or not specified
     configFileName = 'devnet.appConfig.js';
+    network = 'devnet'; // Explicitly set network to devnet
   }
   // Construct the path relative to the current file (App.jsx is in src/)
   loadedConfigPathForImport = `../config/${configFileName}`;
@@ -79,6 +82,7 @@ async function loadAppConfiguration() {
     ...restOfConfig, 
     rpcUrls: rpcUrls,
     wsUrls: wsUrls,
+    network: network, // Add network to the config
     loadedPath: `config/${configFileName}` // For display purposes, show relative to project root (e.g. config/devnet.appConfig.js)
   };
 }
@@ -471,6 +475,7 @@ function App() {
           <h2 style={{textAlign: 'center'}}>Transaction Reports ({state.allTransactionResults.length} Processed)</h2>
           <TransactionTimingsTable
             allTransactionsData={state.allTransactionResults} 
+            network={state.config ? state.config.network : 'devnet'} // Pass network to component
           />
         </div>
       )}
