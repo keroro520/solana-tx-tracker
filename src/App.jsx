@@ -362,6 +362,9 @@ function App() {
         console.error(`Loop ${i} (Tx ${state.currentTransactionIndex +1}/${numTransactionsToRun}): Critical error from executeSingleTransaction, stopping. Error: ${error.message}`);
         break;
       }
+
+      // sleep 2 seconds
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
   };
 
