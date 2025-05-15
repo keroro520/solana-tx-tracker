@@ -41,21 +41,57 @@ function App() {
       try {
         const configData = await loadAppConfiguration();
         dispatch({ type: 'LOAD_CONFIG_SUCCESS', payload: configData });
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.INFO: Config loaded: ${configData.loadedPath}` } });
       } catch (error) {
         dispatch({ type: 'LOAD_CONFIG_ERROR', payload: { message: error.message, path: 'N/A' } });
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.ERROR: Config load error: ${error.message}` } });
       }
     };
     loadInitialConfig();
 
-    // Cleanup subscriptions on component unmount
+    // Store original console methods
+    const originalConsoleLog = console.log;
+    const originalConsoleError = console.error;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleInfo = console.info;
+
+    // Override console methods
+    console.log = (...args) => {
+      originalConsoleLog.apply(console, args);
+      const message = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.LOG: ${message}` } });
+    };
+    console.error = (...args) => {
+      originalConsoleError.apply(console, args);
+      const message = args.map(arg => typeof arg === 'string' ? arg : (arg instanceof Error ? arg.message : JSON.stringify(arg))).join(' ');
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.ERROR: ${message}` } });
+    };
+    console.warn = (...args) => {
+      originalConsoleWarn.apply(console, args);
+      const message = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.WARN: ${message}` } });
+    };
+    console.info = (...args) => {
+      originalConsoleInfo.apply(console, args);
+      const message = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.INFO: ${message}` } });
+    };
+
+    // Cleanup subscriptions and restore console on component unmount
     return () => {
       activeSubscriptions.current.forEach(({ connection, subId }) => {
         if (connection && typeof connection.removeSignatureListener === 'function') {
-          console.log("Cleaning up App: Removing subscription ID:", subId);
+          originalConsoleLog("Cleaning up App: Removing subscription ID:", subId); // Use original log for cleanup phase
           connection.removeSignatureListener(subId);
         }
       });
       activeSubscriptions.current = [];
+
+      // Restore original console methods
+      console.log = originalConsoleLog;
+      console.error = originalConsoleError;
+      console.warn = originalConsoleWarn;
+      console.info = originalConsoleInfo;
     };
   }, [dispatch]);
 
