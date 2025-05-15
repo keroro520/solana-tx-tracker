@@ -15,7 +15,7 @@ function EventLog({ events }) {
       <h3>Event Log:</h3>
       <ul className="event-list">
         {events.map((event, index) => (
-          <li key={index} className="event-item">
+          <li key={`${event.timestamp}-${index}`} className="event-item">
             <span className="event-timestamp">{formatTimestamp(event.timestamp)}</span>
             <span className="event-message">{event.message}</span>
           </li>

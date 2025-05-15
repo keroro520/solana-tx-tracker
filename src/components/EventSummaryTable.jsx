@@ -95,8 +95,8 @@ const EventSummaryTable = ({ events, endpointsConfig }) => {
           </tr>
         </thead>
         <tbody>
-          {relevantEvents.map((eventItem) => (
-            <tr key={eventItem.id}>
+          {relevantEvents.map((eventItem, index) => (
+            <tr key={`${eventItem.id}-${index}`}>
               <td>{eventItem.timestamp}</td>
               <td>{eventItem.event}</td>
               <td>{eventItem.url}</td>
