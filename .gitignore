@@ -24,9 +24,10 @@ dist-ssr
 *.sw?
 
 # Local configuration - KEEP SENSITIVE DATA OUT OF VERSION CONTROL
+config/
 src/config/appConfig.js
 .env
 .env.*
 !.env.example
 
-config/
+creative*
