@@ -13,6 +13,8 @@ const initialState = {
   createdAt: null,
   transactionSentAt: null, // New: Timestamp when all RPCs are about to be sent
   firstWsConfirmedAt: null, // New: Timestamp of the first WS confirmation
+  firstSentToEndpointName: null, // New: Name of the RPC endpoint that first sent the transaction
+  firstConfirmedByEndpointName: null, // New: Name of the WS endpoint that first confirmed it
   rpcSendResults: [], // New: Array of { name, url, status, sendDuration, rpcSignatureOrError, sentAt }
   wsConfirmationResults: [], // New: Array of { name, url, status, confirmationContextSlot, wsDurationMs, error, overallSentAtForDurCalc, confirmedAt }
   globalError: null, // { message: string, type: 'config' | 'critical' }
@@ -45,6 +47,8 @@ function appReducer(state, action) {
         createdAt: null, 
         transactionSentAt: null,
         firstWsConfirmedAt: null,
+        firstSentToEndpointName: null, 
+        firstConfirmedByEndpointName: null,
         rpcSendResults: [], // Clear previous RPC results
         wsConfirmationResults: [], // Clear previous WS results
         globalError: null
@@ -96,12 +100,14 @@ function appReducer(state, action) {
     case 'SET_TRANSACTION_SENT_AT':
       return {
         ...state,
-        transactionSentAt: action.payload,
+        transactionSentAt: action.payload.timestamp !== undefined ? action.payload.timestamp : action.payload,
+        firstSentToEndpointName: action.payload.endpointName !== undefined ? action.payload.endpointName : state.firstSentToEndpointName,
       };
     case 'SET_FIRST_WS_CONFIRMED_AT':
       return {
         ...state,
-        firstWsConfirmedAt: action.payload,
+        firstWsConfirmedAt: action.payload.timestamp,
+        firstConfirmedByEndpointName: action.payload.endpointName,
       };
     default:
       return state;

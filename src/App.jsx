@@ -231,7 +231,7 @@ function App() {
               if (!firstWsConfirmedRef.current) {
                 console.log(`First WS confirmation from ${confirmationResult.endpointName}. Completing process.`);
                 firstWsConfirmedRef.current = true;
-                dispatch({ type: 'SET_FIRST_WS_CONFIRMED_AT', payload: currentEventTimestamp });
+                dispatch({ type: 'SET_FIRST_WS_CONFIRMED_AT', payload: { timestamp: currentEventTimestamp, endpointName: confirmationResult.endpointName } });
                 dispatch({ type: 'SET_GLOBAL_STATUS', payload: `Process Complete (First WS Confirmation via ${confirmationResult.endpointName})` });
                 dispatch({ type: 'PROCESS_COMPLETE' });
 
@@ -297,6 +297,16 @@ function App() {
         const rpcConnection = new Connection(rpcConfig.url, 'confirmed');
         dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending RPC to ${rpcConfig.name}...` } });
         
+        // Assuming sendTransactionToRpc might be the first point an RPC is known to be sent
+        // We need a mechanism to identify the *first* successful (or attempted) send for the timing table.
+        // For simplicity, we'll use the overallStartTime for TxFirstSentAt and the name of the *first RPC in the config* 
+        // as the one it was "first sent to". This is a simplification.
+        // A more accurate approach would be to capture the actual first send time from sendTransactionToRpc, 
+        // but that utility currently doesn't return the exact send initiation time for the *first* send across all calls.
+        if (state.config.rpcUrls.indexOf(rpcConfig) === 0) {
+            dispatch({ type: 'SET_TRANSACTION_SENT_AT', payload: { timestamp: overallStartTime, endpointName: rpcConfig.name } });
+        }
+
         sendTransactionToRpc(rpcConnection, serializedTransaction, rpcConfig.name)
           .then(rpcResult => {
             // sendTransactionToRpc should dispatch its own UPDATE_RPC_SEND_RESULT upon completion.
@@ -375,9 +385,12 @@ function App() {
         <div className="reports-section" style={{ marginTop: '20px', borderTop: '1px solid #ccc', paddingTop: '20px' }}>
           <h2 style={{textAlign: 'center'}}>Transaction Reports</h2>
           <TransactionTimingsTable
+            signature={state.transactionSignature}
             createdAt={state.createdAt}
-            sentAt={state.transactionSentAt}
-            confirmedAt={state.firstWsConfirmedAt}
+            firstSentAt={state.transactionSentAt} // This will now be an object { timestamp, endpointName } or just timestamp
+            firstSentToEndpointName={state.firstSentToEndpointName} // This is the new state field
+            firstConfirmedAt={state.firstWsConfirmedAt} // This will now be an object { timestamp, endpointName }
+            firstConfirmedByEndpointName={state.firstConfirmedByEndpointName} // This is the new state field
           />
         </div>
       )}
