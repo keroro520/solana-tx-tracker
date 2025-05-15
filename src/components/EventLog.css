@@ -15,8 +15,8 @@
 .event-list {
   list-style-type: none;
   padding-left: 0;
-  max-height: 300px; /* Example max height, adjust as needed */
-  overflow-y: auto;   /* Add scroll for overflow */
+  /* max-height: 300px; Example max height, adjust as needed */
+  /* overflow-y: auto;   Add scroll for overflow */
 }
 
 .event-item {
