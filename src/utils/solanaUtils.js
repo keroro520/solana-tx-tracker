@@ -79,8 +79,6 @@ export async function createSimpleTransferTransaction(connection, sourceKeypair)
     }
 
 
-    console.log(`Transaction created. Signature: ${signature}, Created At: ${new Date(createdAt).toISOString()}`);
-
     return {
       transaction, // The fully signed Transaction object
       signature,     // The base58 encoded signature string
@@ -104,7 +102,6 @@ export async function sendTransactionToRpc(connection, serializedTransaction, en
   let sendDuration;
   let rpcSignatureOrError;
 
-  console.log(`Attempting to send transaction to ${endpointName} at ${new Date(sentAt).toISOString()}`);
   try {
     const signature = await connection.sendRawTransaction(
       serializedTransaction,
@@ -116,7 +113,7 @@ export async function sendTransactionToRpc(connection, serializedTransaction, en
     );
     sendDuration = Date.now() - sentAt;
     rpcSignatureOrError = signature;
-    console.log(`Successfully sent to ${endpointName}. RPC Signature: ${signature}, Duration: ${sendDuration}ms`);
+    console.log(`Successfully sent to ${endpointName}. Duration: ${sendDuration}ms`);
   } catch (error) {
     sendDuration = Date.now() - sentAt;
     rpcSignatureOrError = error;
@@ -145,7 +142,7 @@ export async function subscribeToSignatureConfirmation(
   timeoutMs = 100000 // Default timeout 30 seconds
 ) {
   const wsSubscribedAt = Date.now();
-  console.log(`Subscribing to signature ${transactionSignature} on ${endpointName}}`);
+  // console.log(`Subscribing to signature ${transactionSignature} on ${endpointName}}`);
   
   let timeoutId = null;
   let subId = null; // To store the subscription ID for cleanup

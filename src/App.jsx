@@ -93,7 +93,7 @@ function App() {
     console.log = (...args) => {
       originalConsoleLog.apply(console, args);
       const message = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.LOG: ${message}` } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `${message}` } });
     };
     console.error = (...args) => {
       originalConsoleError.apply(console, args);
@@ -108,7 +108,7 @@ function App() {
     console.info = (...args) => {
       originalConsoleInfo.apply(console, args);
       const message = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `CONSOLE.INFO: ${message}` } });
+      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `${message}` } });
     };
 
     // Cleanup subscriptions and restore console on component unmount
@@ -150,8 +150,6 @@ function App() {
     }
     dispatch({ type: 'PROCESS_START' });
     firstWsConfirmedRef.current = false;
-    dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Processing started.' } });
-    console.log("Send Transaction Clicked. Config Loaded From:", state.config.loadedPath);
 
     // Clear previous subscriptions (important if user clicks again before full cleanup)
     activeSubscriptions.current.forEach(({ connection, subId }) => {
@@ -171,14 +169,12 @@ function App() {
     const creationRpcUrl = state.config.rpcUrls[0].url;
 
     try {
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Parsing private key.' } });
       const secretKeyUint8Array = parsePrivateKey(state.config.privateKey);
       sourceKeypair = Keypair.fromSecretKey(secretKeyUint8Array);
       
       dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Creating initial RPC connection to ${creationRpcUrl} for transaction creation.` } });
       initialRpcConnection = new Connection(creationRpcUrl, 'confirmed');
       
-      dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: 'Preparing to create and sign transaction.' } });
       const { transaction, signature, createdAt } = await createSimpleTransferTransaction(initialRpcConnection, sourceKeypair);
       transactionSignatureB58 = signature;
       txCreatedAt = createdAt;
@@ -204,7 +200,7 @@ function App() {
           }
         });
         const wsConnection = new Connection(creationRpcUrl, { wsEndpoint: wsConfig.url, commitment: 'confirmed' });
-        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending WebSocket subscription request for signature ${transactionSignatureB58} to ${wsConfig.name}.` } });
+        dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message: `Sending WebSocket subscription request to ${wsConfig.name}.` } });
         
         return subscribeToSignatureConfirmation(
           wsConnection,
@@ -305,8 +301,8 @@ function App() {
           .then(rpcResult => {
             // sendTransactionToRpc should dispatch its own UPDATE_RPC_SEND_RESULT upon completion.
             // This .then is for any additional logging or actions if necessary.
-            const message = rpcResult.rpcSignatureOrError instanceof Error ? `Async RPC Send for ${rpcResult.endpointName} completed with error: ${rpcResult.rpcSignatureOrError.message}` : `Async RPC Send to ${rpcResult.endpointName} completed. Signature: ${rpcResult.rpcSignatureOrError}.`;
-            dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message } });
+            // const message = rpcResult.rpcSignatureOrError instanceof Error ? `Async RPC Send for ${rpcResult.endpointName} completed with error: ${rpcResult.rpcSignatureOrError.message}` : `Async RPC Send to ${rpcResult.endpointName} completed. Signature: ${rpcResult.rpcSignatureOrError}.`;
+            // dispatch({ type: 'LOG_EVENT', payload: { timestamp: Date.now(), message } });
           })
           .catch(error => {
             console.error(`Unhandled error from sendTransactionToRpc promise for ${rpcConfig.name}:`, error);
