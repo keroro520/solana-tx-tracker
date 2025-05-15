@@ -3,7 +3,6 @@ import './App.css';
 import { Keypair, Connection } from '@solana/web3.js';
 import { useAppContext } from './contexts/AppContext';
 import GlobalAlert from './components/GlobalAlert.jsx';
-import ResultsTable from './components/ResultsTable.jsx';
 import TransactionInfo from './components/TransactionInfo.jsx';
 import ConfigDisplay from './components/ConfigDisplay.jsx';
 import EventLog from './components/EventLog.jsx';
@@ -257,15 +256,10 @@ function App() {
           {state.isLoading ? 'Processing...' : 'Send Transaction'}
         </button>
         {state.isLoading && <span className="spinner"></span>}
-        <p style={{ marginTop: '5px' }} className="status-text">
-            <strong>Status:</strong> {state.globalStatus}
-        </p>
       </div>
 
       <TransactionInfo signature={state.transactionSignature} createdAt={state.createdAt} />
       
-      <ResultsTable results={state.results} />
-
       <EventLog events={state.eventLog} />
       
     </div>
